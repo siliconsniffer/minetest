@@ -118,6 +118,16 @@ local function get_formspec(tabview, name, tabdata)
 			retval = retval .. "textarea[0.25,1.85;5.25,2.7;;;" ..
 				core.formspec_escape(gamedata.serverdescription) .. "]"
 		end
+		local idx = core.get_table_index("servers")
+        local server = idx and tabdata.lookup[idx]
+        table.sort(server.clients_list, function(a, b)
+            return string.lower(a) < string.lower(b)
+        end)
+        local clients_list = table.concat(server.clients_list, "\n")
+        retval = retval .. "tooltip[btn_print_clients;" .. fgettext("Clients:\n$1", clients_list) .. "]"
+        retval = retval .. "style[btn_print_clients;padding=6]"
+        retval = retval .. "image_button[4.5,1.3;0.5,0.5;" .. core.formspec_escape(defaulttexturedir ..
+            "server_print_clients.png") .. ";btn_print_clients;]"
 	end
 
 	retval = retval .. "container_end[]"
@@ -322,6 +332,14 @@ local function main_button_handler(tabview, fields, name, tabdata)
 		serverlistmgr.delete_favorite(server)
 		-- the server at [idx+1] will be at idx once list is refreshed
 		set_selected_server(tabdata, idx, tabdata.lookup[idx+1])
+		return true
+	end
+
+	if fields.btn_print_clients then
+		local dlg = create_clientslist_dialog(dialogdata)
+		dlg:set_parent(tabview)
+		tabview:hide()
+		dlg:show()
 		return true
 	end
 
