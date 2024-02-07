@@ -33,6 +33,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "client/mapblock_mesh.h"
 #include "client/sound.h"
 #include "clientmap.h"
+#include "clientmedia.h" // For clientMediaUpdateCacheCopy
 #include "clouds.h"
 #include "config.h"
 #include "content_cao.h"
@@ -769,6 +770,7 @@ protected:
 	bool initSound();
 	bool createSingleplayerServer(const std::string &map_dir,
 			const SubgameSpec &gamespec, u16 port);
+	void copyServerClientCache();
 
 	// Client creation
 	bool createClient(const GameStartData &start_data);
@@ -1288,9 +1290,6 @@ void Game::run()
 		updateFrame(&graph, &stats, dtime, cam_view);
 		updateProfilerGraphs(&graph);
 
-		// Update if minimap has been disabled by the server
-		m_game_ui->m_flags.show_minimap &= client->shouldShowMinimap();
-
 		if (m_does_lost_focus_pause_game && !device->isWindowFocused() && !isMenuActive()) {
 			showPauseMenu();
 		}
@@ -1453,7 +1452,29 @@ bool Game::createSingleplayerServer(const std::string &map_dir,
 			false, nullptr, error_message);
 	server->start();
 
+	copyServerClientCache();
+
 	return true;
+}
+
+void Game::copyServerClientCache()
+{
+	// It would be possible to let the client directly read the media files
+	// from where the server knows they are. But aside from being more complicated
+	// it would also *not* fill the media cache and cause slower joining of 
+	// remote servers.
+	// (Imagine that you launch a game once locally and then connect to a server.)
+
+	assert(server);
+	auto map = server->getMediaList();
+	u32 n = 0;
+	for (auto &it : map) {
+		assert(it.first.size() == 20); // SHA1
+		if (clientMediaUpdateCacheCopy(it.first, it.second))
+			n++;
+	}
+	infostream << "Copied " << n << " files directly from server to client cache"
+		<< std::endl;
 }
 
 bool Game::createClient(const GameStartData &start_data)
@@ -2450,23 +2471,16 @@ void Game::toggleMinimap(bool shift_pressed)
 	// -->
 	u32 hud_flags = client->getEnv().getLocalPlayer()->hud_flags;
 
-	if (!(hud_flags & HUD_FLAG_MINIMAP_VISIBLE)) {
-		m_game_ui->m_flags.show_minimap = false;
-	} else {
-
+	if (hud_flags & HUD_FLAG_MINIMAP_VISIBLE) {
 	// If radar is disabled, try to find a non radar mode or fall back to 0
 		if (!(hud_flags & HUD_FLAG_MINIMAP_RADAR_VISIBLE))
 			while (mapper->getModeIndex() &&
 					mapper->getModeDef().type == MINIMAP_TYPE_RADAR)
 				mapper->nextMode();
-
-		m_game_ui->m_flags.show_minimap = mapper->getModeDef().type !=
-				MINIMAP_TYPE_OFF;
 	}
 	// <--
 	// End of 'not so satifying code'
-	if ((hud_flags & HUD_FLAG_MINIMAP_VISIBLE) ||
-			(hud && hud->hasElementOfType(HUD_ELEM_MINIMAP)))
+	if (hud && hud->hasElementOfType(HUD_ELEM_MINIMAP))
 		m_game_ui->showStatusText(utf8_to_wide(mapper->getModeDef().label));
 	else
 		m_game_ui->showTranslatedStatusText("Minimap currently disabled by game or mod");
@@ -4334,7 +4348,7 @@ void Game::drawScene(ProfilerGraph *graph, RunStats *stats)
 		draw_crosshair = false;
 #endif
 	this->m_rendering_engine->draw_scene(sky_color, this->m_game_ui->m_flags.show_hud,
-			this->m_game_ui->m_flags.show_minimap, draw_wield_tool, draw_crosshair);
+			draw_wield_tool, draw_crosshair);
 
 	/*
 		Profiler graph

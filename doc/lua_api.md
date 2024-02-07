@@ -5948,8 +5948,11 @@ Environment access
 * `minetest.add_entity(pos, name, [staticdata])`: Spawn Lua-defined entity at
   position.
     * Returns `ObjectRef`, or `nil` if failed
+    * Entities with `static_save = true` can be added also 
+      to unloaded and non-generated blocks.
 * `minetest.add_item(pos, item)`: Spawn item
     * Returns `ObjectRef`, or `nil` if failed
+    * Items can be added also to unloaded and non-generated blocks.
 * `minetest.get_player_by_name(name)`: Get an `ObjectRef` to a player
 * `minetest.get_objects_inside_radius(pos, radius)`: returns a list of
   ObjectRefs.
@@ -6180,6 +6183,17 @@ Environment access
     * increase level of leveled node by level, default `level` equals `1`
     * if `totallevel > maxlevel`, returns rest (`total-max`)
     * `level` must be between -127 and 127
+* `minetest.get_node_boxes(box_type, pos, [node])`
+    * `box_type` must be `"node_box"`, `"collision_box"` or `"selection_box"`.
+    * `pos` must be a node position.
+    * `node` can be a table in the form `{name=string, param1=number, param2=number}`.
+      If `node` is `nil`, the actual node at `pos` is used instead.
+    * Resolves any facedir-rotated boxes, connected boxes and the like into
+      actual boxes.
+    * Returns a list of boxes in the form
+      `{{x1, y1, z1, x2, y2, z2}, {x1, y1, z1, x2, y2, z2}, ...}`. Coordinates
+      are relative to `pos`.
+    * See also: [Node boxes](#node-boxes)
 * `minetest.fix_light(pos1, pos2)`: returns `true`/`false`
     * resets the light in a cuboid-shaped part of
       the map and removes lighting bugs.
@@ -6786,7 +6800,7 @@ Misc.
   (regardless of online status)
 * `minetest.hud_replace_builtin(name, hud_definition)`
     * Replaces definition of a builtin hud element
-    * `name`: `"breath"` or `"health"`
+    * `name`: `"breath"`, `"health"` or `"minimap"`
     * `hud_definition`: definition to replace builtin definition
 * `minetest.parse_relative_number(arg, relative_to)`: returns number or nil
     * Helper function for chat commands.
@@ -7273,6 +7287,8 @@ an itemstring, a table or `nil`.
       the item breaks after `max_uses` times
     * Valid `max_uses` range is [0,65536]
     * Does nothing if item is not a tool or if `max_uses` is 0
+* `get_wear_bar_params()`: returns the wear bar parameters of the item,
+  or nil if none are defined for this item type or in the stack's meta
 * `add_item(item)`: returns leftover `ItemStack`
     * Put some item or stack onto this stack
 * `item_fits(item)`: returns `true` if item or stack can be fully added to
@@ -7312,6 +7328,10 @@ Can be obtained via `item:get_meta()`.
 * All methods in MetaDataRef
 * `set_tool_capabilities([tool_capabilities])`
     * Overrides the item's tool capabilities
+    * A nil value will clear the override data and restore the original
+      behavior.
+* `set_wear_bar_params([wear_bar_params])`
+    * Overrides the item's wear bar parameters (see "Wear Bar Color" section)
     * A nil value will clear the override data and restore the original
       behavior.
 
@@ -8397,6 +8417,8 @@ Player properties need to be saved manually.
     -- If `rotate = false`, the selection box will not rotate with the object itself, remaining fixed to the axes.
     -- If `rotate = true`, it will match the object's rotation and any attachment rotations.
     -- Raycasts use the selection box and object's rotation, but do *not* obey attachment rotations.
+    -- For server-side raycasts to work correctly,
+    -- the selection box should extend at most 5 units in each direction.
 
 
     pointable = true,
@@ -8813,6 +8835,19 @@ Used by `minetest.register_node`, `minetest.register_craftitem`, and
         -- suitable groupcap using the formula "uses * 3^(maxlevel - 1)".
         -- It is recommend to set this explicitly instead of relying on the
         -- fallback behavior.
+    },
+
+    -- Set wear bar color of the tool by setting color stops and blend mode
+    -- See "Wear Bar Color" section for further explanation including an example
+    wear_color = {
+        -- interpolation mode: 'constant' or 'linear'
+        -- (nil defaults to 'constant')
+        blend = "linear",
+        color_stops = {
+            [0.0] = "#ff0000",
+            [0.5] = "#ffff00",
+            [1.0] = "#00ff00",
+        }
     },
 
     node_placement_prediction = nil,
@@ -9381,6 +9416,46 @@ Used by `minetest.register_node`.
     -- nodename will show "othermodname", but mod_origin will say "modname"
 }
 ```
+
+Wear Bar Color
+--------------
+
+'Wear Bar' is a property of items that defines the coloring
+of the bar that appears under damaged tools.
+If it is absent, the default behavior of green-yellow-red is
+used.
+
+### Wear bar colors definition
+
+#### Syntax
+
+```lua
+{
+    -- 'constant' or 'linear'
+    -- (nil defaults to 'constant')
+    blend = "linear",
+    color_stops = {
+        [0.0] = "#ff0000",
+        [0.5] = "slateblue",
+        [1.0] = {r=0, g=255, b=0, a=150},
+    }
+}
+```
+
+#### Blend mode `blend`
+
+* `linear`: blends smoothly between each defined color point.
+* `constant`: each color starts at its defined point, and continues up to the next point
+
+#### Color stops `color_stops`
+
+Specified as `ColorSpec` color values assigned to `float` durability keys.
+
+"Durability" is defined as `1 - (wear / 65535)`.
+
+#### Shortcut usage
+
+Wear bar color can also be specified as a single `ColorSpec` instead of a table.
 
 Crafting recipes
 ----------------

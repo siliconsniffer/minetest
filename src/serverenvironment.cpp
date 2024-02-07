@@ -625,13 +625,6 @@ bool ServerEnvironment::removePlayerFromDatabase(const std::string &name)
 	return m_player_database->removePlayer(name);
 }
 
-void ServerEnvironment::kickAllPlayers(AccessDeniedCode reason,
-	const std::string &str_reason, bool reconnect)
-{
-	for (RemotePlayer *player : m_players)
-		m_server->DenyAccess(player->getPeerId(), reason, str_reason, reconnect);
-}
-
 void ServerEnvironment::saveLoadedPlayers(bool force)
 {
 	for (RemotePlayer *player : m_players) {
@@ -1051,7 +1044,8 @@ void ServerEnvironment::activateBlock(MapBlock *block, u32 additional_dtime)
 			<<stamp<<", game time: "<<m_game_time<<std::endl;*/
 
 	// Remove stored static objects if clearObjects was called since block's timestamp
-	if (stamp == BLOCK_TIMESTAMP_UNDEFINED || stamp < m_last_clear_objects_time) {
+	// Note that non-generated blocks may still have stored static objects
+	if (stamp != BLOCK_TIMESTAMP_UNDEFINED && stamp < m_last_clear_objects_time) {
 		block->m_static_objects.clearStored();
 		// do not set changed flag to avoid unnecessary mapblock writes
 	}
@@ -1643,9 +1637,8 @@ void ServerEnvironment::step(float dtime)
 		if (player->getPeerId() == PEER_ID_INEXISTENT)
 			continue;
 
-		PlayerSAO *sao = player->getPlayerSAO();
-		if (sao && player->inventory.checkModified())
-			m_server->SendInventory(sao, true);
+		if (player->inventory.checkModified())
+			m_server->SendInventory(player, true);
 	}
 
 	// Send outdated detached inventories
@@ -1834,8 +1827,8 @@ void ServerEnvironment::getSelectedActiveObjects(
 	const std::optional<Pointabilities> &pointabilities)
 {
 	std::vector<ServerActiveObject *> objs;
-	getObjectsInsideRadius(objs, shootline_on_map.start,
-		shootline_on_map.getLength() + 10.0f, nullptr);
+	getObjectsInsideRadius(objs, shootline_on_map.getMiddle(),
+		0.5 * shootline_on_map.getLength() + 5 * BS, nullptr);
 	const v3f line_vector = shootline_on_map.getVector();
 
 	for (auto obj : objs) {
@@ -1900,11 +1893,6 @@ u16 ServerEnvironment::addActiveObjectRaw(std::unique_ptr<ServerActiveObject> ob
 		return 0;
 	}
 
-	// Register reference in scripting api (must be done before post-init)
-	m_script->addObjectReference(object);
-	// Post-initialize object
-	object->addedToEnvironment(dtime_s);
-
 	// Add static data to block
 	if (object->isStaticAllowed()) {
 		// Add static object to active static list of the block
@@ -1923,11 +1911,19 @@ u16 ServerEnvironment::addActiveObjectRaw(std::unique_ptr<ServerActiveObject> ob
 					MOD_REASON_ADD_ACTIVE_OBJECT_RAW);
 		} else {
 			v3s16 p = floatToInt(objectpos, BS);
-			errorstream<<"ServerEnvironment::addActiveObjectRaw(): "
-				<<"could not emerge block for storing id="<<object->getId()
-				<<" statically (pos="<<p<<")"<<std::endl;
+			errorstream << "ServerEnvironment::addActiveObjectRaw(): "
+				<< "could not emerge block " << p << " for storing id="
+				<< object->getId() << " statically" << std::endl;
+			// clean in case of error
+			m_ao_manager.removeObject(object->getId());
+			return 0;
 		}
 	}
+
+	// Register reference in scripting api (must be done before post-init)
+	m_script->addObjectReference(object);
+	// Post-initialize object
+	object->addedToEnvironment(dtime_s);
 
 	return object->getId();
 }

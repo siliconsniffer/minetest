@@ -83,9 +83,6 @@ void               push_content_features     (lua_State *L,
 
 void               push_nodebox              (lua_State *L,
                                               const NodeBox &box);
-void               push_box                  (lua_State *L,
-                                              const std::vector<aabb3f> &box);
-
 void               push_palette              (lua_State *L,
                                               const std::vector<video::SColor> *palette);
 
@@ -116,6 +113,9 @@ void               push_pointabilities       (lua_State *L, const Pointabilities
 ToolCapabilities   read_tool_capabilities    (lua_State *L, int table);
 void               push_tool_capabilities    (lua_State *L,
                                               const ToolCapabilities &prop);
+WearBarParams      read_wear_bar_params      (lua_State *L, int table);
+void               push_wear_bar_params      (lua_State *L,
+                                              const WearBarParams &prop);
 
 void read_item_definition (lua_State *L, int index, const ItemDefinition &default_def,
 		ItemDefinition &def);
