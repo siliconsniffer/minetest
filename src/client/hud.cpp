@@ -39,10 +39,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "wieldmesh.h"
 #include "client/renderingengine.h"
 #include "client/minimap.h"
-
-#ifdef HAVE_TOUCHSCREENGUI
 #include "gui/touchscreengui.h"
-#endif
 
 #define OBJECT_CROSSHAIR_LINE_SIZE 8
 #define CROSSHAIR_LINE_SIZE 10
@@ -100,7 +97,7 @@ Hud::Hud(Client *client, LocalPlayer *player,
 
 	if (g_settings->getBool("enable_shaders")) {
 		IShaderSource *shdrsrc = client->getShaderSource();
-		u16 shader_id = shdrsrc->getShader(
+		auto shader_id = shdrsrc->getShader(
 			m_mode == HIGHLIGHT_HALO ? "selection_shader" : "default_shader", TILE_MATERIAL_ALPHA);
 		m_selection_material.MaterialType = shdrsrc->getShaderInfo(shader_id).material;
 	} else {
@@ -138,6 +135,7 @@ Hud::Hud(Client *client, LocalPlayer *player,
 
 	m_rotation_mesh_buffer.getMaterial().Lighting = false;
 	m_rotation_mesh_buffer.getMaterial().MaterialType = video::EMT_TRANSPARENT_ALPHA_CHANNEL;
+	m_rotation_mesh_buffer.setHardwareMappingHint(scene::EHM_STATIC);
 }
 
 Hud::~Hud()
@@ -292,10 +290,8 @@ void Hud::drawItems(v2s32 upperleftpos, v2s32 screen_offset, s32 itemcount,
 
 		drawItem(mainlist->getItem(i), item_rect, (i + 1) == selectitem);
 
-#ifdef HAVE_TOUCHSCREENGUI
 		if (is_hotbar && g_touchscreengui)
 			g_touchscreengui->registerHotbarRect(i, item_rect);
-#endif
 	}
 }
 
@@ -749,10 +745,8 @@ void Hud::drawStatbar(v2s32 pos, u16 corner, u16 drawdir,
 
 void Hud::drawHotbar(u16 playeritem)
 {
-#ifdef HAVE_TOUCHSCREENGUI
 	if (g_touchscreengui)
 		g_touchscreengui->resetHotbarRects();
-#endif
 
 	InventoryList *mainlist = inventory->getList("main");
 	if (mainlist == NULL) {
@@ -1106,24 +1100,23 @@ void drawItemStack(
 		video::SColor basecolor =
 			client->idef()->getItemstackColor(item, client);
 
-		u32 mc = mesh->getMeshBufferCount();
+		const u32 mc = mesh->getMeshBufferCount();
+		if (mc > imesh->buffer_colors.size())
+			imesh->buffer_colors.resize(mc);
 		for (u32 j = 0; j < mc; ++j) {
 			scene::IMeshBuffer *buf = mesh->getMeshBuffer(j);
-			// we can modify vertices relatively fast,
-			// because these meshes are not buffered.
-			assert(buf->getHardwareMappingHint_Vertex() == scene::EHM_NEVER);
 			video::SColor c = basecolor;
 
-			if (imesh->buffer_colors.size() > j) {
-				ItemPartColor *p = &imesh->buffer_colors[j];
-				if (p->override_base)
-					c = p->color;
-			}
+			auto &p = imesh->buffer_colors[j];
+			p.applyOverride(c);
 
-			if (imesh->needs_shading)
-				colorizeMeshBuffer(buf, &c);
-			else
-				setMeshBufferColor(buf, c);
+			if (p.needColorize(c)) {
+				buf->setDirty(scene::EBT_VERTEX);
+				if (imesh->needs_shading)
+					colorizeMeshBuffer(buf, &c);
+				else
+					setMeshBufferColor(buf, c);
+			}
 
 			video::SMaterial &material = buf->getMaterial();
 			material.MaterialType = video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF;

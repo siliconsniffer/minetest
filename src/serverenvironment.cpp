@@ -1253,10 +1253,7 @@ void ServerEnvironment::clearObjects(ClearObjectsMode mode)
 			return false;
 		}
 
-		// Tell the object about removal
-		obj->removingFromEnvironment();
-		// Deregister in scripting api
-		m_script->removeObjectReference(obj);
+		processActiveObjectRemove(obj, id);
 
 		// Delete active object
 		return true;
@@ -1616,9 +1613,8 @@ void ServerEnvironment::step(float dtime)
 		Manage particle spawner expiration
 	*/
 	if (m_particle_management_interval.step(dtime, 1.0)) {
-		for (std::unordered_map<u32, float>::iterator i = m_particle_spawners.begin();
-			i != m_particle_spawners.end(); ) {
-			//non expiring spawners
+		for (auto i = m_particle_spawners.begin(); i != m_particle_spawners.end(); ) {
+			// non expiring spawners
 			if (i->second == PARTICLE_SPAWNER_NO_EXPIRY) {
 				++i;
 				continue;
@@ -1626,7 +1622,7 @@ void ServerEnvironment::step(float dtime)
 
 			i->second -= 1.0f;
 			if (i->second <= 0.f)
-				m_particle_spawners.erase(i++);
+				i = m_particle_spawners.erase(i);
 			else
 				++i;
 		}
@@ -1977,10 +1973,7 @@ void ServerEnvironment::removeRemovedObjects()
 			}
 		}
 
-		// Tell the object about removal
-		obj->removingFromEnvironment();
-		// Deregister in scripting api
-		m_script->removeObjectReference(obj);
+		processActiveObjectRemove(obj, id);
 
 		// Delete
 		return true;
@@ -2217,10 +2210,7 @@ void ServerEnvironment::deactivateFarObjects(bool _force_delete)
 			return false;
 		}
 
-		// Tell the object about removal
-		obj->removingFromEnvironment();
-		// Deregister in scripting api
-		m_script->removeObjectReference(obj);
+		processActiveObjectRemove(obj, id);
 
 		// Delete active object
 		return true;
@@ -2281,6 +2271,16 @@ bool ServerEnvironment::saveStaticToBlock(
 	obj->m_static_block = blockpos;
 
 	return true;
+}
+
+void ServerEnvironment::processActiveObjectRemove(ServerActiveObject *obj, u16 id)
+{
+	// Tell the object about removal
+	obj->removingFromEnvironment();
+	// Deregister in scripting api
+	m_script->removeObjectReference(obj);
+	// stop attached sounds
+	m_server->stopAttachedSounds(id);
 }
 
 PlayerDatabase *ServerEnvironment::openPlayerDatabase(const std::string &name,
