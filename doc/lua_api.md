@@ -1095,6 +1095,7 @@ Table used to specify how a sound is played:
     -- its end in `-start_time` seconds.
     -- It is unspecified what happens if `loop` is false and `start_time` is
     -- smaller than minus the sound's length.
+
     -- Available since feature `sound_params_start_time`.
 
     loop = false,
@@ -1107,6 +1108,21 @@ Table used to specify how a sound is played:
     object = <an ObjectRef>,
     -- Attach the sound to an object.
     -- Can't be used together with `pos`.
+
+    -- For backward compatibility, sounds continue playing at the last location
+    -- of the object if an object is removed (for example if an entity dies).
+    -- It is not recommended to rely on this.
+    -- For death sounds, prefer playing a positional sound instead.
+
+    -- If you want to stop a sound when an entity dies or is deactivated,
+    -- store the handle and call `minetest.sound_stop` in `on_die` / `on_deactivate`.
+
+    -- Ephemeral sounds are entirely unaffected by the object being removed
+    -- or leaving the active object range.
+
+    -- Non-ephemeral sounds stop playing on clients if objects leave
+    -- the active object range; they should start playing again if objects
+    --- come back into range (but due to a known bug, they don't yet).
 
     to_player = name,
     -- Only play for this player.
@@ -5966,6 +5982,7 @@ Environment access
       returns `{name="ignore", param1=0, param2=0}` for unloaded areas.
 * `minetest.get_node_or_nil(pos)`
     * Same as `get_node` but returns `nil` for unloaded areas.
+    * Note that areas may still contain "ignore" despite being loaded.
 * `minetest.get_node_light(pos[, timeofday])`
     * Gets the light value at the given position. Note that the light value
       "inside" the node at the given position is returned, so you usually want
@@ -6011,7 +6028,7 @@ Environment access
 * `minetest.add_entity(pos, name, [staticdata])`: Spawn Lua-defined entity at
   position.
     * Returns `ObjectRef`, or `nil` if failed
-    * Entities with `static_save = true` can be added also 
+    * Entities with `static_save = true` can be added also
       to unloaded and non-generated blocks.
 * `minetest.add_item(pos, item)`: Spawn item
     * Returns `ObjectRef`, or `nil` if failed
@@ -6202,13 +6219,16 @@ Environment access
     * Returns the position of the blocking node when `false`
     * `pos1`: First position
     * `pos2`: Second position
-* `minetest.raycast(pos1, pos2, objects, liquids)`: returns `Raycast`
+* `minetest.raycast(pos1, pos2, objects, liquids, pointabilities)`: returns `Raycast`
     * Creates a `Raycast` object.
     * `pos1`: start of the ray
     * `pos2`: end of the ray
     * `objects`: if false, only nodes will be returned. Default is `true`.
     * `liquids`: if false, liquid nodes (`liquidtype ~= "none"`) won't be
                  returned. Default is `false`.
+    * `pointabilities`: Allows overriding the `pointable` property of
+      nodes and objects. Uses the same format as the `pointabilities` property
+      of item definitions. Default is `nil`.
 * `minetest.find_path(pos1,pos2,searchdistance,max_jump,max_drop,algorithm)`
     * returns table containing path that can be walked on
     * returns a table of 3D points representing a path from `pos1` to `pos2` or
@@ -6594,6 +6614,18 @@ This allows you easy interoperability for delegating work to jobs.
     * Register a path to a Lua file to be imported when an async environment
       is initialized. You can use this to preload code which you can then call
       later using `minetest.handle_async()`.
+* `minetest.register_async_metatable(name, mt)`:
+    * Register a metatable that should be preserved when data is transferred
+    between the main thread and the async environment.
+    * `name` is a string that identifies the metatable. It is recommended to
+      follow the `modname:name` convention for this identifier.
+    * `mt` is the metatable to register.
+    * Note that it is allowed to register the same metatable under multiple
+      names, but it is not allowed to register multiple metatables under the
+      same name.
+    * You must register the metatable in both the main environment
+      and the async environment for this mechanism to work.
+
 
 ### List of APIs available in an async environment
 
@@ -6619,6 +6651,7 @@ Class instances that can be transferred between environments:
 Functions:
 * Standalone helpers such as logging, filesystem, encoding,
   hashing or compression APIs
+* `minetest.register_async_metatable` (see above)
 
 Variables:
 * `minetest.settings`
@@ -8932,16 +8965,16 @@ Used by `minetest.register_node`, `minetest.register_craftitem`, and
     -- even those for which `pointable = false`
 
     pointabilities = {
-		nodes = {
-			["default:stone"] = "blocking",
-			["group:leaves"] = false,
-		},
-		objects = {
-			["modname:entityname"] = true,
-			["group:ghosty"] = true, -- (an armor group)
-		}
+        nodes = {
+            ["default:stone"] = "blocking",
+            ["group:leaves"] = false,
+        },
+        objects = {
+            ["modname:entityname"] = true,
+            ["group:ghosty"] = true, -- (an armor group)
+        },
     },
-    -- Contains lists to override the `pointable` property of pointed nodes and objects.
+    -- Contains lists to override the `pointable` property of nodes and objects.
     -- The index can be a node/entity name or a group with the prefix `"group:"`.
     -- (For objects `armor_groups` are used and for players the entity name is irrelevant.)
     -- If multiple fields fit, the following priority order is applied:

@@ -32,7 +32,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <vector>
 
 #include "itemdef.h"
-#include "client/tile.h"
 #include "client/game.h"
 
 using namespace irr;
@@ -295,6 +294,8 @@ private:
 	// apply joystick status
 	void applyJoystickStatus();
 
+	// map to store the IDs and original positions of currently pressed pointers
+	std::unordered_map<size_t, v2s32> m_pointer_downpos;
 	// map to store the IDs and positions of currently pressed pointers
 	std::unordered_map<size_t, v2s32> m_pointer_pos;
 

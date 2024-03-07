@@ -177,6 +177,7 @@ int LuaRaycast::create_object(lua_State *L)
 
 	bool objects = true;
 	bool liquids = false;
+	std::optional<Pointabilities> pointabilities = std::nullopt;
 
 	v3f pos1 = checkFloatPos(L, 1);
 	v3f pos2 = checkFloatPos(L, 2);
@@ -186,9 +187,12 @@ int LuaRaycast::create_object(lua_State *L)
 	if (lua_isboolean(L, 4)) {
 		liquids = readParam<bool>(L, 4);
 	}
+	if (lua_istable(L, 5)) {
+		pointabilities = read_pointabilities(L, 5);
+	}
 
 	LuaRaycast *o = new LuaRaycast(core::line3d<f32>(pos1, pos2),
-		objects, liquids, std::nullopt);
+		objects, liquids, pointabilities);
 
 	*(void **) (lua_newuserdata(L, sizeof(void *))) = o;
 	luaL_getmetatable(L, className);
@@ -324,39 +328,26 @@ int ModApiEnv::l_swap_node(lua_State *L)
 	return 1;
 }
 
-// get_node(pos)
-// pos = {x=num, y=num, z=num}
-int ModApiEnv::l_get_node(lua_State *L)
+// get_node_raw(x, y, z) -> content, param1, param2, pos_ok
+int ModApiEnv::l_get_node_raw(lua_State *L)
 {
 	GET_ENV_PTR;
 
 	// pos
-	v3s16 pos = read_v3s16(L, 1);
-	// Do it
-	MapNode n = env->getMap().getNode(pos);
-	// Return node
-	pushnode(L, n);
-	return 1;
-}
-
-// get_node_or_nil(pos)
-// pos = {x=num, y=num, z=num}
-int ModApiEnv::l_get_node_or_nil(lua_State *L)
-{
-	GET_ENV_PTR;
-
-	// pos
-	v3s16 pos = read_v3s16(L, 1);
+	// mirrors implementation of read_v3s16 (with the exact same rounding)
+	double x = lua_tonumber(L, 1);
+	double y = lua_tonumber(L, 2);
+	double z = lua_tonumber(L, 3);
+	v3s16 pos = doubleToInt(v3d(x, y, z), 1.0);
 	// Do it
 	bool pos_ok;
 	MapNode n = env->getMap().getNode(pos, &pos_ok);
-	if (pos_ok) {
-		// Return node
-		pushnode(L, n);
-	} else {
-		lua_pushnil(L);
-	}
-	return 1;
+	// Return node and pos_ok
+	lua_pushinteger(L, n.getContent());
+	lua_pushinteger(L, n.getParam1());
+	lua_pushinteger(L, n.getParam2());
+	lua_pushboolean(L, pos_ok);
+	return 4;
 }
 
 // get_node_light(pos, timeofday)
@@ -1479,8 +1470,7 @@ void ModApiEnv::Initialize(lua_State *L, int top)
 	API_FCT(swap_node);
 	API_FCT(add_item);
 	API_FCT(remove_node);
-	API_FCT(get_node);
-	API_FCT(get_node_or_nil);
+	API_FCT(get_node_raw);
 	API_FCT(get_node_light);
 	API_FCT(get_natural_light);
 	API_FCT(place_node);
@@ -1543,6 +1533,19 @@ void ModApiEnv::InitializeClient(lua_State *L, int top)
 	MMVManip *vm = getVManip(L); \
 	if (!vm)                     \
 		return 0
+
+// get_node_or_nil(pos)
+int ModApiEnvVM::l_get_node_or_nil(lua_State *L)
+{
+	GET_VM_PTR;
+
+	v3s16 pos = read_v3s16(L, 1);
+	if (vm->exists(pos))
+		pushnode(L, vm->getNodeRefUnsafe(pos));
+	else
+		lua_pushnil(L);
+	return 1;
+}
 
 // get_node_max_level(pos)
 int ModApiEnvVM::l_get_node_max_level(lua_State *L)
@@ -1713,6 +1716,7 @@ MMVManip *ModApiEnvVM::getVManip(lua_State *L)
 void ModApiEnvVM::InitializeEmerge(lua_State *L, int top)
 {
 	// other, more trivial functions are in builtin/emerge/env.lua
+	API_FCT(get_node_or_nil);
 	API_FCT(get_node_max_level);
 	API_FCT(get_node_level);
 	API_FCT(set_node_level);
