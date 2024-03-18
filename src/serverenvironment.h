@@ -281,15 +281,6 @@ public:
 	u16 addActiveObject(std::unique_ptr<ServerActiveObject> object);
 
 	/*
-		Add an active object as a static object to the corresponding
-		MapBlock.
-		Caller allocates memory, ServerEnvironment frees memory.
-		Return value: true if succeeded, false if failed.
-		(note:  not used, pending removal from engine)
-	*/
-	//bool addActiveObjectAsStatic(ServerActiveObject *object);
-
-	/*
 		Find out what new objects have been added to
 		inside a radius around a position
 	*/
@@ -363,6 +354,9 @@ public:
 	// Clear objects, loading and going through every MapBlock
 	void clearObjects(ClearObjectsMode mode);
 
+	// to be called before destructor
+	void deactivateBlocksAndObjects();
+
 	// This makes stuff happen
 	void step(f32 dtime);
 
@@ -388,7 +382,7 @@ public:
 		bool static_exists, v3s16 static_block=v3s16(0,0,0));
 
 	RemotePlayer *getPlayer(const session_t peer_id);
-	RemotePlayer *getPlayer(const char* name);
+	RemotePlayer *getPlayer(const char* name, bool match_invalid_peer = false);
 	const std::vector<RemotePlayer *> getPlayers() const { return m_players; }
 	u32 getPlayerCount() const { return m_players.size(); }
 
@@ -425,7 +419,7 @@ private:
 		Returns 0 if not added and thus deleted.
 	*/
 	u16 addActiveObjectRaw(std::unique_ptr<ServerActiveObject> object,
-			bool set_changed, u32 dtime_s);
+			const StaticObject *from_static, u32 dtime_s);
 
 	/*
 		Remove all objects that satisfy (isGone() && m_known_by_count==0)

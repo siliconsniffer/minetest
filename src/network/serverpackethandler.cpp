@@ -179,7 +179,7 @@ void Server::handleCommand_Init(NetworkPacket* pkt)
 		return;
 	}
 
-	RemotePlayer *player = m_env->getPlayer(playername);
+	RemotePlayer *player = m_env->getPlayer(playername, true);
 
 	// If player is already connected, cancel
 	if (player && player->getPeerId() != PEER_ID_INEXISTENT) {
@@ -895,8 +895,7 @@ bool Server::checkInteractDistance(RemotePlayer *player, const f32 d, const std:
 {
 	ItemStack selected_item, hand_item;
 	player->getWieldedItem(&selected_item, &hand_item);
-	f32 max_d = BS * getToolRange(selected_item.getDefinition(m_itemdef),
-			hand_item.getDefinition(m_itemdef));
+	f32 max_d = BS * getToolRange(selected_item, hand_item, m_itemdef);
 
 	// Cube diagonal * 1.5 for maximal supported node extents:
 	// sqrt(3) * 1.5 ≅ 2.6

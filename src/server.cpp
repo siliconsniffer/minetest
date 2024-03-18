@@ -321,7 +321,6 @@ Server::Server(
 
 Server::~Server()
 {
-
 	// Send shutdown message
 	SendChatMessage(PEER_ID_INEXISTENT, ChatMessage(CHATMESSAGE_TYPE_ANNOUNCE,
 			L"*** Server shutting down"));
@@ -349,18 +348,31 @@ Server::~Server()
 
 	actionstream << "Server: Shutting down" << std::endl;
 
-	// Do this before stopping the server in case mapgen callbacks need to access
-	// server-controlled resources (like ModStorages). Also do them before
-	// shutdown callbacks since they may modify state that is finalized in a
+	// Stop server step from happening
+	if (m_thread) {
+		stop();
+		delete m_thread;
+	}
+
+	// Stop all emerge activity and finish off mapgen callbacks. Do this before
+	// shutdown callbacks since there may be state that is finalized in a
 	// callback.
+	// Note: The emerge manager is not deleted yet because further code can
+	//       still interact with map loading.
 	if (m_emerge)
 		m_emerge->stopThreads();
 
 	if (m_env) {
 		MutexAutoLock envlock(m_env_mutex);
 
-		// Execute script shutdown hooks
-		infostream << "Executing shutdown hooks" << std::endl;
+		try {
+			// Empty out the environment, this can also invoke callbacks.
+			m_env->deactivateBlocksAndObjects();
+		} catch (ModError &e) {
+			addShutdownError(e);
+		}
+
+		infostream << "Server: Executing shutdown hooks" << std::endl;
 		try {
 			m_script->on_shutdown();
 		} catch (ModError &e) {
@@ -369,12 +381,10 @@ Server::~Server()
 
 		infostream << "Server: Saving environment metadata" << std::endl;
 		m_env->saveMeta();
-	}
 
-	// Stop threads
-	if (m_thread) {
-		stop();
-		delete m_thread;
+		// Note that this also deletes and saves the map.
+		delete m_env;
+		m_env = nullptr;
 	}
 
 	// Write any changes before deletion.
@@ -388,21 +398,17 @@ Server::~Server()
 		}
 	}
 
-	// Delete things in the reverse order of creation
+	// Delete the rest in the reverse order of creation
+	delete m_game_settings;
 	delete m_emerge;
-	delete m_env;
-	delete m_rollback;
-	delete m_mod_storage_database;
 	delete m_banmanager;
+	delete m_mod_storage_database;
+	delete m_startup_server_map; // if available
+	delete m_script;
+	delete m_rollback;
 	delete m_itemdef;
 	delete m_nodedef;
 	delete m_craftdef;
-
-	// Deinitialize scripting
-	infostream << "Server: Deinitializing scripting" << std::endl;
-	delete m_script;
-	delete m_startup_server_map; // if available
-	delete m_game_settings;
 
 	while (!m_unsent_map_edit_queue.empty()) {
 		delete m_unsent_map_edit_queue.front();
@@ -465,8 +471,7 @@ void Server::init()
 	// Must be created before mod loading because we have some inventory creation
 	m_inventory_mgr = std::make_unique<ServerInventoryManager>();
 
-	m_script->loadMod(getBuiltinLuaPath() + DIR_DELIM "init.lua", BUILTIN_MOD_NAME);
-	m_script->checkSetByBuiltin();
+	m_script->loadBuiltin();
 
 	m_gamespec.checkAndLog();
 	m_modmgr->loadMods(m_script);
@@ -582,7 +587,7 @@ void Server::start()
 
 void Server::stop()
 {
-	infostream<<"Server: Stopping and waiting threads"<<std::endl;
+	infostream<<"Server: Stopping and waiting for threads"<<std::endl;
 
 	// Stop threads (set run=false first so both start stopping)
 	m_thread->stop();
@@ -1107,7 +1112,7 @@ PlayerSAO* Server::StageTwoClientInit(session_t peer_id)
 		}
 	}
 
-	RemotePlayer *player = m_env->getPlayer(playername.c_str());
+	RemotePlayer *player = m_env->getPlayer(playername.c_str(), true);
 
 	// If failed, cancel
 	if (!playersao || !player) {
@@ -1948,9 +1953,13 @@ void Server::SendMovePlayerRel(session_t peer_id, const v3f &added_pos)
 
 void Server::SendPlayerFov(session_t peer_id)
 {
+	RemotePlayer *player = m_env->getPlayer(peer_id);
+	if (!player)
+		return;
+
 	NetworkPacket pkt(TOCLIENT_FOV, 4 + 1 + 4, peer_id);
 
-	PlayerFovSpec fov_spec = m_env->getPlayer(peer_id)->getFov();
+	PlayerFovSpec fov_spec = player->getFov();
 	pkt << fov_spec.fov << fov_spec.is_multiplier << fov_spec.transition_time;
 
 	Send(&pkt);
@@ -1978,8 +1987,7 @@ void Server::SendEyeOffset(session_t peer_id, v3f first, v3f third, v3f third_fr
 void Server::SendPlayerPrivileges(session_t peer_id)
 {
 	RemotePlayer *player = m_env->getPlayer(peer_id);
-	assert(player);
-	if(player->getPeerId() == PEER_ID_INEXISTENT)
+	if (!player)
 		return;
 
 	std::set<std::string> privs;
@@ -1998,8 +2006,7 @@ void Server::SendPlayerPrivileges(session_t peer_id)
 void Server::SendPlayerInventoryFormspec(session_t peer_id)
 {
 	RemotePlayer *player = m_env->getPlayer(peer_id);
-	assert(player);
-	if (player->getPeerId() == PEER_ID_INEXISTENT)
+	if (!player)
 		return;
 
 	NetworkPacket pkt(TOCLIENT_INVENTORY_FORMSPEC, 0, peer_id);
@@ -2011,8 +2018,7 @@ void Server::SendPlayerInventoryFormspec(session_t peer_id)
 void Server::SendPlayerFormspecPrepend(session_t peer_id)
 {
 	RemotePlayer *player = m_env->getPlayer(peer_id);
-	assert(player);
-	if (player->getPeerId() == PEER_ID_INEXISTENT)
+	if (!player)
 		return;
 
 	NetworkPacket pkt(TOCLIENT_FORMSPEC_PREPEND, 0, peer_id);
@@ -2190,11 +2196,6 @@ s32 Server::playSound(ServerPlayingSound &params, bool ephemeral)
 					<<"\" not found"<<std::endl;
 			return -1;
 		}
-		if (player->getPeerId() == PEER_ID_INEXISTENT) {
-			infostream<<"Server::playSound: Player \""<<params.to_player
-					<<"\" not connected"<<std::endl;
-			return -1;
-		}
 		dst_clients.push_back(player->getPeerId());
 	} else {
 		std::vector<session_t> clients = m_clients.getClientIDs();
@@ -2292,22 +2293,25 @@ void Server::stopAttachedSounds(session_t peer_id, u16 object_id)
 	assert(peer_id != PEER_ID_INEXISTENT);
 	assert(object_id);
 
-	for (auto it = m_playing_sounds.begin(); it != m_playing_sounds.end();) {
-		ServerPlayingSound &sound = it->second;
-
+	auto cb = [&] (const s32 id, ServerPlayingSound &sound) -> bool {
 		if (sound.object != object_id)
-			continue;
+			return false;
 
 		auto clients_it = sound.clients.find(peer_id);
 		if (clients_it == sound.clients.end())
-			continue;
+			return false;
 
 		NetworkPacket pkt(TOCLIENT_STOP_SOUND, 4);
-		pkt << it->first;
+		pkt << id;
 		Send(peer_id, &pkt);
 
 		sound.clients.erase(clients_it);
-		if (sound.clients.empty())
+		// delete if client list empty
+		return sound.clients.empty();
+	};
+
+	for (auto it = m_playing_sounds.begin(); it != m_playing_sounds.end(); ) {
+		if (cb(it->first, it->second))
 			it = m_playing_sounds.erase(it);
 		else
 			++it;
@@ -2817,8 +2821,7 @@ void Server::SendMinimapModes(session_t peer_id,
 		std::vector<MinimapMode> &modes, size_t wanted_mode)
 {
 	RemotePlayer *player = m_env->getPlayer(peer_id);
-	assert(player);
-	if (player->getPeerId() == PEER_ID_INEXISTENT)
+	if (!player)
 		return;
 
 	NetworkPacket pkt(TOCLIENT_MINIMAP_MODES, 0, peer_id);
@@ -3363,11 +3366,7 @@ void Server::notifyPlayer(const char *name, const std::wstring &msg)
 	}
 
 	RemotePlayer *player = m_env->getPlayer(name);
-	if (!player) {
-		return;
-	}
-
-	if (player->getPeerId() == PEER_ID_INEXISTENT)
+	if (!player)
 		return;
 
 	SendChatMessage(player->getPeerId(), ChatMessage(msg));
@@ -4039,7 +4038,7 @@ PlayerSAO* Server::emergePlayer(const char *name, session_t peer_id, u16 proto_v
 	RemotePlayer *player = m_env->getPlayer(name);
 
 	// If player is already connected, cancel
-	if (player && player->getPeerId() != PEER_ID_INEXISTENT) {
+	if (player) {
 		infostream<<"emergePlayer(): Player already connected"<<std::endl;
 		return NULL;
 	}

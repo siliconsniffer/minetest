@@ -2560,6 +2560,8 @@ Some of the values in the key-value store are handled specially:
   0 = default, 1 = left / up, 2 = middle, 3 = right / down
   The default currently is the same as right/down.
   Example: 6 = 2 + 1*4 = middle,up
+* `range`: Overrides the pointing range
+  Example: `meta:set_float("range", 4.2)`
 
 Example:
 
@@ -3640,6 +3642,19 @@ Player Inventory lists
     * Is not created automatically, use `InvRef:set_size`
     * Is only used to enhance the empty hand's tool capabilities
 
+ItemStack transaction order
+---------------------------
+
+This list describes the situation for non-empty ItemStacks in both slots
+that cannot be stacked at all, hence triggering an ItemStack swap operation.
+Put/take callbacks on empty ItemStack are not executed.
+
+1. The "allow take" and "allow put" callbacks are each run once for the source
+   and destination inventory.
+2. The allowed ItemStacks are exchanged.
+3. The "on take" callbacks are run for the source and destination inventories
+4. The "on put" callbacks are run for the source and destination inventories
+
 Colors
 ======
 
@@ -4533,6 +4548,12 @@ Can specify a probability of a node randomly appearing when placed.
 This decoration type is intended to be used for multi-node sized discrete
 structures, such as trees, cave spikes, rocks, and so on.
 
+`lsystem`
+-----------
+
+Generates a L-system tree at the position where the decoration is placed.
+Uses the same L-system as `minetest.spawn_tree`, but is faster than using it manually.
+The `treedef` field in the decoration definition is used for the tree definition.
 
 
 
@@ -5376,6 +5397,10 @@ Utilities
       dynamic_add_media_startup = true,
       -- dynamic_add_media supports `filename` and `filedata` parameters (5.9.0)
       dynamic_add_media_filepath = true,
+       -- L-system decoration type (5.9.0)
+      lsystem_decoration_type = true,
+      -- Overrideable pointing range using the itemstack meta key `"range"` (5.9.0)
+      item_meta_range = true,
   }
   ```
 
@@ -8959,6 +8984,7 @@ Used by `minetest.register_node`, `minetest.register_craftitem`, and
 
     range = 4.0,
     -- Range of node and object pointing that is possible with this item held
+    -- Can be overridden with itemstack meta.
 
     liquids_pointable = false,
     -- If true, item can point to all liquid nodes (`liquidtype ~= "none"`),
@@ -10134,7 +10160,7 @@ See [Decoration types]. Used by `minetest.register_decoration`.
 ```lua
 {
     deco_type = "simple",
-    -- Type. "simple" or "schematic" supported
+    -- Type. "simple", "schematic" or "lsystem" supported
 
     place_on = "default:dirt_with_grass",
     -- Node (or list of nodes) that the decoration can be placed on
@@ -10287,6 +10313,12 @@ See [Decoration types]. Used by `minetest.register_decoration`.
     -- Effect is inverted for "all_ceilings" decorations.
     -- Ignored by 'y_min', 'y_max' and 'spawn_by' checks, which always refer
     -- to the 'place_on' node.
+
+    ----- L-system-type parameters
+
+    treedef = {},
+    -- Same as for `minetest.spawn_tree`.
+    -- See section [L-system trees] for more details.
 }
 ```
 
