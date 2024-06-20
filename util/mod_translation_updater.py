@@ -118,21 +118,47 @@ def main():
 			else:
 				update_folder(os.path.abspath("./"))
 
-# Group 2 will be the string, groups 1 and 3 will be the delimiters (" or ')
+# Compile pattern for matching lua function call
+def compile_func_call_pattern(argument_pattern):
+	return re.compile(
+		# Look for beginning of file or anything that isn't a function identifier
+		r'(?:^|[\.=,{\(\s])' +
+		# Matches S, FS, NS, or NFS function call
+		r'N?F?S\s*' +
+		# The pattern to match argument
+		argument_pattern,
+		re.DOTALL)
+
+# Add parentheses around a pattern
+def parenthesize_pattern(pattern):
+	return (
+		# Start of argument: open parentheses and space (optional)
+		r'\(\s*' +
+		# The pattern to be parenthesized
+		pattern +
+		# End of argument or function call: space, comma, or close parentheses
+		r'[\s,\)]')
+
+# Quoted string
+# Group 2 will be the string, group 1 and group 3 will be the delimiters (" or ')
 # See https://stackoverflow.com/questions/46967465/regex-match-text-in-either-single-or-double-quote
-pattern_lua_quoted = re.compile(
-	r'(?:^|[\.=,{\(\s])' # Look for beginning of file or anything that isn't a function identifier
-	r'N?F?S\s*\(\s*' # Matches S, FS, NS or NFS function call
-	r'(["\'])((?:\\\1|(?:(?!\1)).)*)(\1)' # Quoted string
-	r'[\s,\)]', # End of call or argument
-	re.DOTALL)
+pattern_lua_quoted_string = r'(["\'])((?:\\\1|(?:(?!\1)).)*)(\1)'
+
+# Double square bracket string (multiline)
+pattern_lua_square_bracket_string = r'\[\[(.*?)\]\]'
+
+# Handles the " ... " or ' ... ' string delimiters
+pattern_lua_quoted = compile_func_call_pattern(parenthesize_pattern(pattern_lua_quoted_string))
+
 # Handles the [[ ... ]] string delimiters
-pattern_lua_bracketed = re.compile(
-	r'(?:^|[\.=,{\(\s])' # Same as for pattern_lua_quoted
-	r'N?F?S\s*\(\s*' # Same as for pattern_lua_quoted
-	r'\[\[(.*?)\]\]' # [[ ... ]] string delimiters
-	r'[\s,\)]', # Same as for pattern_lua_quoted
-	re.DOTALL)
+pattern_lua_bracketed = compile_func_call_pattern(parenthesize_pattern(pattern_lua_square_bracket_string))
+
+# Handles like pattern_lua_quoted, but for single parameter (without parentheses)
+# See https://www.lua.org/pil/5.html for informations about single argument call
+pattern_lua_quoted_single = compile_func_call_pattern(pattern_lua_quoted_string)
+
+# Same as pattern_lua_quoted_single, but for [[ ... ]] string delimiters
+pattern_lua_bracketed_single = compile_func_call_pattern(pattern_lua_square_bracket_string)
 
 # Handles "concatenation" .. " of strings"
 pattern_concat = re.compile(r'["\'][\s]*\.\.[\s]*["\']', re.DOTALL)
@@ -154,7 +180,7 @@ pattern_tr_filename = re.compile(r'\.tr$')
 pattern_bad_luastring = re.compile(
 	r'^@$|'	# single @, OR
 	r'[^@]@$|' # trailing unescaped @, OR
-	r'(?<!@)@(?=[^@1-9])' # an @ that is not escaped or part of a placeholder
+	r'(?<!@)@(?=[^@1-9n])' # an @ that is not escaped or part of a placeholder
 )
 
 # Attempt to read the mod's name from the mod.conf file or folder name. Returns None on failure
@@ -194,13 +220,16 @@ def mkdir_p(path):
 # dKeyStrings is a dictionary of localized string to source file sets
 # dOld is a dictionary of existing translations and comments from
 # the previous version of this text
-def strings_to_text(dkeyStrings, dOld, mod_name, header_comments, textdomain):
+def strings_to_text(dkeyStrings, dOld, mod_name, header_comments, textdomain, templ = None):
 	# if textdomain is specified, insert it at the top
 	if textdomain != None:
 		lOut = [textdomain] # argument is full textdomain line
 	# otherwise, use mod name as textdomain automatically
 	else:
 		lOut = [f"# textdomain: {mod_name}"]
+	if templ is not None and templ[2] and (header_comments is None or not header_comments.startswith(templ[2])):
+		# header comments in the template file
+		lOut.append(templ[2])
 	if header_comments is not None:
 		lOut.append(header_comments)
 
@@ -225,8 +254,14 @@ def strings_to_text(dkeyStrings, dOld, mod_name, header_comments, textdomain):
 			val = dOld.get(localizedString, {})
 			translation = val.get("translation", "")
 			comment = val.get("comment")
+			templ_comment = None
+			if templ:
+				templ_val = templ[0].get(localizedString, {})
+				templ_comment = templ_val.get("comment")
 			if params["break-long-lines"] and len(localizedString) > doublespace_threshold and not lOut[-1] == "":
 				lOut.append("")
+			if templ_comment != None and templ_comment != "" and (comment is None or comment == "" or not comment.startswith(templ_comment)):
+				lOut.append(templ_comment)
 			if comment != None and comment != "" and not comment.startswith("# textdomain:"):
 				lOut.append(comment)
 			lOut.append(f"{localizedString}={translation}")
@@ -272,9 +307,17 @@ def read_lua_file_strings(lua_file):
 	with open(lua_file, encoding='utf-8') as text_file:
 		text = text_file.read()
 
+		strings = []
+
+		for s in pattern_lua_quoted_single.findall(text):
+			strings.append(s[1])
+		for s in pattern_lua_bracketed_single.findall(text):
+			strings.append(s)
+
+		# Only concatenate strings after matching
+		# single parameter call (without parantheses)
 		text = re.sub(pattern_concat, "", text)
 
-		strings = []
 		for s in pattern_lua_quoted.findall(text):
 			strings.append(s[1])
 		for s in pattern_lua_bracketed.findall(text):
@@ -425,19 +468,20 @@ def generate_template(folder, mod_name):
 		sources = sorted(list(sources), key=str.lower)
 		newSources = []
 		for i in sources:
-			i = "/".join(os.path.split(i)).lstrip("/")
+			i = i.replace("\\", "/")
 			newSources.append(f"{symbol_source_prefix} {i} {symbol_source_suffix}")
 		dOut[d] = newSources
 
 	templ_file = os.path.join(folder, "locale/template.txt")
 	write_template(templ_file, dOut, mod_name)
-	return dOut
+	new_template = import_tr_file(templ_file) # re-import to get all new data
+	return (dOut, new_template)
 
 # Updates an existing .tr file, copying the old one to a ".old" file
 # if any changes have happened
 # dNew is the data used to generate the template, it has all the
 # currently-existing localized strings
-def update_tr_file(dNew, mod_name, tr_file):
+def update_tr_file(dNew, templ, mod_name, tr_file):
 	if params["verbose"]:
 		print(f"updating {tr_file}")
 
@@ -445,7 +489,7 @@ def update_tr_file(dNew, mod_name, tr_file):
 	dOld = tr_import[0]
 	textOld = tr_import[1]
 
-	textNew = strings_to_text(dNew, dOld, mod_name, tr_import[2], tr_import[3])
+	textNew = strings_to_text(dNew, dOld, mod_name, tr_import[2], tr_import[3], templ)
 
 	if textOld and textOld != textNew:
 		print(f"{tr_file} has changed.")
@@ -463,12 +507,12 @@ def update_mod(folder):
 	assert not is_modpack(folder)
 	modname = get_modname(folder)
 	print(f"Updating translations for {modname}")
-	data = generate_template(folder, modname)
+	(data, templ) = generate_template(folder, modname)
 	if data == None:
 		print(f"No translatable strings found in {modname}")
 	else:
 		for tr_file in get_existing_tr_files(folder):
-			update_tr_file(data, modname, os.path.join(folder, "locale/", tr_file))
+			update_tr_file(data, templ, modname, os.path.join(folder, "locale/", tr_file))
 
 def is_modpack(folder):
 	return os.path.exists(os.path.join(folder, "modpack.txt")) or os.path.exists(os.path.join(folder, "modpack.conf"))

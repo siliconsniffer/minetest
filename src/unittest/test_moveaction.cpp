@@ -22,8 +22,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "mock_inventorymanager.h"
 #include "mock_server.h"
 #include "mock_serveractiveobject.h"
-#include "scripting_server.h"
-#include "server/mods.h"
 
 class TestMoveAction : public TestBase
 {
@@ -36,6 +34,7 @@ public:
 	void testMove(ServerActiveObject *obj, IGameDef *gamedef);
 	void testMoveFillStack(ServerActiveObject *obj, IGameDef *gamedef);
 	void testMoveSomewhere(ServerActiveObject *obj, IGameDef *gamedef);
+	void testMoveSomewherePartial(ServerActiveObject *obj, IGameDef *gamedef);
 	void testMoveUnallowed(ServerActiveObject *obj, IGameDef *gamedef);
 	void testMovePartial(ServerActiveObject *obj, IGameDef *gamedef);
 
@@ -53,32 +52,27 @@ void TestMoveAction::runTests(IGameDef *gamedef)
 {
 	MockServer server(getTestTempDirectory());
 
-	ServerScripting server_scripting(&server);
+	server.createScripting();
 	try {
-		// FIXME: When removing the line below, the unittest does NOT crash
-		// (but it should) when running all unittests in order or registration.
-		// Some Lua API functions used in builtin require the Mgr to be present.
-		server.m_modmgr = std::make_unique<ServerModManager>(server.m_path_world);
-
 		std::string builtin = Server::getBuiltinLuaPath() + DIR_DELIM;
-		server_scripting.loadBuiltin();
-		server_scripting.loadMod(builtin + "game" DIR_DELIM "tests" DIR_DELIM "test_moveaction.lua", BUILTIN_MOD_NAME);
+		auto script = server.getScriptIface();
+		script->loadBuiltin();
+		script->loadMod(builtin + "game" DIR_DELIM "tests" DIR_DELIM "test_moveaction.lua", BUILTIN_MOD_NAME);
 	} catch (ModError &e) {
-		// Print backtrace in case of syntax errors
 		rawstream << e.what() << std::endl;
 		num_tests_failed = 1;
 		return;
 	}
 
-	server.m_script = &server_scripting;
-
 	MetricsBackend mb;
-	ServerEnvironment server_env(nullptr, &server_scripting, &server, "", &mb);
+	auto null_map = std::unique_ptr<ServerMap>();
+	ServerEnvironment server_env(std::move(null_map), &server, &mb);
 	MockServerActiveObject obj(&server_env);
 
 	TEST(testMove, &obj, gamedef);
 	TEST(testMoveFillStack, &obj, gamedef);
 	TEST(testMoveSomewhere, &obj, gamedef);
+	TEST(testMoveSomewherePartial, &obj, gamedef);
 	TEST(testMoveUnallowed, &obj, gamedef);
 	TEST(testMovePartial, &obj, gamedef);
 
@@ -88,8 +82,6 @@ void TestMoveAction::runTests(IGameDef *gamedef)
 
 	TEST(testCallbacks, &obj, &server);
 	TEST(testCallbacksSwap, &obj, &server);
-
-	server.m_script = nullptr; // Do not free stack memory
 }
 
 static ItemStack parse_itemstack(const char *s)
@@ -153,7 +145,29 @@ void TestMoveAction::testMoveSomewhere(ServerActiveObject *obj, IGameDef *gamede
 
 	UASSERT(inv.p2.getList("main")->getItem(0).getItemString() == "default:brick 10");
 	UASSERT(inv.p2.getList("main")->getItem(1).getItemString() == "default:stone 36");
+	// Partially moved
 	UASSERT(inv.p2.getList("main")->getItem(2).getItemString() == "default:stone 99");
+}
+
+void TestMoveAction::testMoveSomewherePartial(ServerActiveObject *obj, IGameDef *gamedef)
+{
+	// "Fail" because the destination list is full.
+	MockInventoryManager inv(gamedef);
+
+	InventoryList *src = inv.p1.addList("main", 3);
+	src->addItem(0, parse_itemstack("default:brick 10"));
+	src->changeItem(1, parse_itemstack("default:stone 111")); // oversized
+
+	InventoryList *dst = inv.p2.addList("main", 1);
+	dst->addItem(0, parse_itemstack("default:stone 98"));
+
+	// No free slots to fit
+	apply_action("MoveSomewhere 10 player:p1 main 0 player:p2 main", &inv, obj, gamedef);
+	UASSERT(inv.p1.getList("main")->getItem(0).getItemString() == "default:brick 10");
+
+	// Only 1 item fits
+	apply_action("MoveSomewhere 111 player:p1 main 1 player:p2 main", &inv, obj, gamedef);
+	UASSERT(inv.p1.getList("main")->getItem(1).getItemString() == "default:stone 110");
 }
 
 void TestMoveAction::testMoveUnallowed(ServerActiveObject *obj, IGameDef *gamedef)

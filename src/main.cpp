@@ -17,9 +17,8 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
 
-#include "irrlichttypes.h" // must be included before anything irrlicht, see comment in the file
+#include "irrlichttypes_bloated.h"
 #include "irrlicht.h" // createDevice
-#include "irrlichttypes_extrabloated.h"
 #include "irrlicht_changes/printing.h"
 #include "benchmark/benchmark.h"
 #include "chat_interface.h"
@@ -28,8 +27,8 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "server.h"
 #include "filesys.h"
 #include "version.h"
-#include "client/game.h"
 #include "defaultsettings.h"
+#include "migratesettings.h"
 #include "gettext.h"
 #include "log.h"
 #include "util/quicktune.h"
@@ -427,11 +426,12 @@ static void print_version(std::ostream &os)
 {
 	os << PROJECT_NAME_C " " << g_version_hash
 		<< " (" << porting::getPlatformName() << ")" << std::endl;
-#ifndef SERVER
-	os << "Using Irrlicht " IRRLICHT_SDK_VERSION << std::endl;
-#endif
 #if USE_LUAJIT
-	os << "Using " << LUAJIT_VERSION << std::endl;
+	os << "Using " << LUAJIT_VERSION
+#ifdef OPENRESTY_LUAJIT
+	<< " (OpenResty)"
+#endif
+	<< std::endl;
 #else
 	os << "Using " << LUA_RELEASE << std::endl;
 #endif
@@ -691,6 +691,8 @@ static bool init_common(const Settings &cmd_args, int argc, char *argv[])
 
 	if (!read_config_file(cmd_args))
 		return false;
+
+	migrate_settings();
 
 	init_log_streams(cmd_args);
 

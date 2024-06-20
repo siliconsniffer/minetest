@@ -137,6 +137,7 @@ class GUIFormSpecMenu : public GUIModalMenu
 		std::string fname;
 		std::wstring flabel;
 		std::wstring fdefault;
+		std::string url;
 		s32 fid;
 		bool send;
 		FormspecFieldType ftype;
@@ -220,6 +221,11 @@ public:
 	void allowClose(bool value)
 	{
 		m_allowclose = value;
+	}
+
+	void setDebugView(bool value)
+	{
+		m_show_debug = value;
 	}
 
 	void lockSize(bool lock,v2u32 basescreensize=v2u32(0,0))

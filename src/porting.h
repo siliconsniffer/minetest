@@ -33,7 +33,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "irrlichttypes.h" // u64
 #include "debug.h"
 #include "constants.h"
-#include "gettime.h"
+#include "util/timetaker.h" // TimePrecision
 
 #ifdef _MSC_VER
 	#define SWPRINTF_CHARSTRING L"%S"
@@ -290,11 +290,33 @@ void osSpecificInit();
 // This attaches to the parents process console, or creates a new one if it doesnt exist.
 void attachOrCreateConsole();
 
+#if HAVE_MALLOC_TRIM
+/**
+ * Call this after freeing bigger blocks of memory. Used on some platforms to
+ * properly give memory back to the OS.
+ * @param amount Number of bytes freed
+*/
+void TrackFreedMemory(size_t amount);
+
+/**
+ * Call this regularly from background threads. This performs the actual trimming
+ * and is potentially slow.
+ */
+void TriggerMemoryTrim();
+#else
+static inline void TrackFreedMemory(size_t amount) { (void)amount; }
+static inline void TriggerMemoryTrim() { (void)0; }
+#endif
+
 #ifdef _WIN32
 // Quotes an argument for use in a CreateProcess() commandline (not cmd.exe!!)
 std::string QuoteArgv(const std::string &arg);
+
+// Convert an error code (e.g. from GetLastError()) into a string.
+std::string ConvertError(DWORD error_code);
 #endif
 
+// snprintf wrapper
 int mt_snprintf(char *buf, const size_t buf_size, const char *fmt, ...);
 
 /**

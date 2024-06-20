@@ -402,11 +402,11 @@ DigParams getDigParams(const ItemGroupList &groups,
 			continue;
 
 		const std::string &groupname = groupcap.first;
-		float time = 0;
 		int rating = itemgroup_get(groups, groupname);
-		bool time_exists = cap.getTime(rating, &time);
-		if (!time_exists)
+		const auto time_o = cap.getTime(rating);
+		if (!time_o.has_value())
 			continue;
+		float time = *time_o;
 
 		if (leveldiff > 1)
 			time /= leveldiff;
@@ -482,7 +482,7 @@ PunchDamageResult getPunchDamage(
 	{
 		HitParams hitparams = getHitParams(armor_groups, toolcap,
 				time_from_last_punch,
-				punchitem->wear);
+				punchitem ? punchitem->wear : 0);
 		result.did_punch = true;
 		result.wear = hitparams.wear;
 		result.damage = hitparams.hp;

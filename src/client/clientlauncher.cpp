@@ -36,6 +36,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "network/networkexceptions.h"
 #include <IGUISpriteBank.h>
 #include <ICameraSceneNode.h>
+#include <unordered_map>
 
 #if USE_SOUND
 	#include "sound/sound_openal.h"
@@ -46,11 +47,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 gui::IGUIEnvironment *guienv = nullptr;
 gui::IGUIStaticText *guiroot = nullptr;
 MainMenuManager g_menumgr;
-
-bool isMenuActive()
-{
-	return g_menumgr.menuCount() != 0;
-}
 
 // Passed to menus to allow disconnecting and exiting
 MainGameCallback *g_gamecallback = nullptr;
@@ -73,13 +69,22 @@ static void dump_start_data(const GameStartData &data)
 ClientLauncher::~ClientLauncher()
 {
 	delete input;
-
-	delete receiver;
+	g_settings->deregisterChangedCallback("dpi_change_notifier", setting_changed_callback, this);
+	g_settings->deregisterChangedCallback("gui_scaling", setting_changed_callback, this);
 
 	delete g_fontengine;
+	g_fontengine = nullptr;
 	delete g_gamecallback;
+	g_gamecallback = nullptr;
+
+	guiroot = nullptr;
+	guienv = nullptr;
+	assert(g_menumgr.menuCount() == 0);
 
 	delete m_rendering_engine;
+
+	// delete event receiver only after all Irrlicht stuff is gone
+	delete receiver;
 
 #if USE_SOUND
 	g_sound_manager_singleton.reset();
@@ -103,10 +108,8 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 		g_sound_manager_singleton = createSoundManagerSingleton();
 #endif
 
-	if (!init_engine()) {
-		errorstream << "Could not initialize game engine." << std::endl;
+	if (!init_engine())
 		return false;
-	}
 
 	if (!m_rendering_engine->get_video_driver()) {
 		errorstream << "Could not initialize video driver." << std::endl;
@@ -126,10 +129,11 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 		setAttribute(scene::ALLOW_ZWRITE_ON_TRANSPARENT, true);
 
 	guienv = m_rendering_engine->get_gui_env();
-	init_guienv(guienv);
+	config_guienv();
+	g_settings->registerChangedCallback("dpi_change_notifier", setting_changed_callback, this);
+	g_settings->registerChangedCallback("gui_scaling", setting_changed_callback, this);
 
 	g_fontengine = new FontEngine(guienv);
-	FATAL_ERROR_IF(!g_fontengine, "Font engine creation failed.");
 
 	// Create the menu clouds
 	// This is only global so it can be used by RenderingEngine::draw_load_screen().
@@ -164,11 +168,7 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 	while (m_rendering_engine->run() && !*kill &&
 		!g_gamecallback->shutdown_requested) {
 		// Set the window caption
-#if IRRLICHT_VERSION_MT_REVISION >= 15
 		auto driver_name = m_rendering_engine->getVideoDriver()->getName();
-#else
-		auto driver_name = wide_to_utf8(m_rendering_engine->getVideoDriver()->getName());
-#endif
 		std::string caption = std::string(PROJECT_NAME_C) +
 			" " + g_version_hash +
 			" [" + gettext("Main Menu") + "]" +
@@ -177,8 +177,9 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 		m_rendering_engine->get_raw_device()->
 			setWindowCaption(utf8_to_wide(caption).c_str());
 
-		try {	// This is used for catching disconnects
-
+#ifdef NDEBUG
+		try {
+#endif
 			m_rendering_engine->get_gui_env()->clear();
 
 			/*
@@ -210,10 +211,6 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 			if (!m_rendering_engine->run() || *kill)
 				break;
 
-			if (g_settings->getBool("enable_touch")) {
-				g_touchscreengui = new TouchScreenGUI(m_rendering_engine->get_raw_device(), receiver);
-			}
-
 			the_game(
 				kill,
 				input,
@@ -223,18 +220,8 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 				chat_backend,
 				&reconnect_requested
 			);
-		} //try
-		catch (con::PeerNotFoundException &e) {
-			error_message = gettext("Connection error (timed out?)");
-			errorstream << error_message << std::endl;
-		}
-		catch (ShaderException &e) {
-			error_message = e.what();
-			errorstream << error_message << std::endl;
-		}
-
 #ifdef NDEBUG
-		catch (std::exception &e) {
+		} catch (std::exception &e) {
 			error_message = "Some exception: ";
 			error_message.append(debug_describe_exc(e));
 			errorstream << error_message << std::endl;
@@ -265,6 +252,13 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 			break;
 		}
 	} // Menu-game loop
+
+	// If profiler was enabled print it one last time
+	if (g_settings->getFloat("profiler_print_interval") > 0) {
+		infostream << "Profiler:" << std::endl;
+		g_profiler->print(infostream);
+		g_profiler->clear();
+	}
 
 	assert(g_menucloudsmgr->getReferenceCount() == 1);
 	g_menucloudsmgr->drop();
@@ -302,8 +296,12 @@ void ClientLauncher::init_args(GameStartData &start_data, const Settings &cmd_ar
 bool ClientLauncher::init_engine()
 {
 	receiver = new MyEventReceiver();
-	m_rendering_engine = new RenderingEngine(receiver);
-	return m_rendering_engine->get_raw_device() != nullptr;
+	try {
+		m_rendering_engine = new RenderingEngine(receiver);
+	} catch (std::exception &e) {
+		errorstream << e.what() << std::endl;
+	}
+	return !!m_rendering_engine;
 }
 
 void ClientLauncher::init_input()
@@ -333,7 +331,12 @@ void ClientLauncher::init_input()
 	}
 }
 
-void ClientLauncher::init_guienv(gui::IGUIEnvironment *guienv)
+void ClientLauncher::setting_changed_callback(const std::string &name, void *data)
+{
+	static_cast<ClientLauncher*>(data)->config_guienv();
+}
+
+void ClientLauncher::config_guienv()
 {
 	gui::IGUISkin *skin = guienv->getSkin();
 
@@ -350,25 +353,37 @@ void ClientLauncher::init_guienv(gui::IGUIEnvironment *guienv)
 	float density = rangelim(g_settings->getFloat("gui_scaling"), 0.5f, 20) *
 		RenderingEngine::getDisplayDensity();
 	skin->setSize(gui::EGDS_CHECK_BOX_WIDTH, (s32)(17.0f * density));
-	skin->setSize(gui::EGDS_SCROLLBAR_SIZE, (s32)(14.0f * density));
+	skin->setSize(gui::EGDS_SCROLLBAR_SIZE, (s32)(21.0f * density));
 	skin->setSize(gui::EGDS_WINDOW_BUTTON_WIDTH, (s32)(15.0f * density));
+
+	static u32 orig_sprite_id = skin->getIcon(gui::EGDI_CHECK_BOX_CHECKED);
+	static std::unordered_map<std::string, u32> sprite_ids;
+
 	if (density > 1.5f) {
-		std::string sprite_path = porting::path_share + "/textures/base/pack/";
-		if (density > 3.5f)
-			sprite_path.append("checkbox_64.png");
-		else if (density > 2.0f)
-			sprite_path.append("checkbox_32.png");
-		else
-			sprite_path.append("checkbox_16.png");
 		// Texture dimensions should be a power of 2
-		gui::IGUISpriteBank *sprites = skin->getSpriteBank();
-		video::IVideoDriver *driver = m_rendering_engine->get_video_driver();
-		video::ITexture *sprite_texture = driver->getTexture(sprite_path.c_str());
-		if (sprite_texture) {
-			s32 sprite_id = sprites->addTextureAsSprite(sprite_texture);
-			if (sprite_id != -1)
-				skin->setIcon(gui::EGDI_CHECK_BOX_CHECKED, sprite_id);
+		std::string path = porting::path_share + "/textures/base/pack/";
+		if (density > 3.5f)
+			path.append("checkbox_64.png");
+		else if (density > 2.0f)
+			path.append("checkbox_32.png");
+		else
+			path.append("checkbox_16.png");
+
+		auto cached_id = sprite_ids.find(path);
+		if (cached_id != sprite_ids.end()) {
+			skin->setIcon(gui::EGDI_CHECK_BOX_CHECKED, cached_id->second);
+		} else {
+			gui::IGUISpriteBank *sprites = skin->getSpriteBank();
+			video::IVideoDriver *driver = m_rendering_engine->get_video_driver();
+			video::ITexture *texture = driver->getTexture(path.c_str());
+			s32 id = sprites->addTextureAsSprite(texture);
+			if (id != -1) {
+				skin->setIcon(gui::EGDI_CHECK_BOX_CHECKED, id);
+				sprite_ids.emplace(path, id);
+			}
 		}
+	} else {
+		skin->setIcon(gui::EGDI_CHECK_BOX_CHECKED, orig_sprite_id);
 	}
 }
 

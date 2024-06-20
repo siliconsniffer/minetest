@@ -63,6 +63,8 @@ The game directory can contain the following files:
     * `name`: (Deprecated) same as title.
     * `description`: Short description to be shown in the content tab.
       See [Translating content meta](#translating-content-meta).
+    * `first_mod`: Use this to specify the mod that must be loaded before any other mod.
+    * `last_mod`: Use this to specify the mod that must be loaded after all other mods
     * `allowed_mapgens = <comma-separated mapgens>`
       e.g. `allowed_mapgens = v5,v6,flat`
       Mapgens not in this list are removed from the list of mapgens for the
@@ -659,8 +661,9 @@ The mask is applied using binary AND.
 
 #### `[sheet:<w>x<h>:<x>,<y>`
 
-Retrieves a tile at position x,y from the base image
-which it assumes to be a tilesheet with dimensions w,h.
+Retrieves a tile at position x, y (in tiles, 0-indexed)
+from the base image, which it assumes to be a tilesheet
+with dimensions w, h (in tiles).
 
 #### `[colorize:<color>:<ratio>`
 
@@ -1411,8 +1414,7 @@ Look for examples in `games/devtest` or `games/minetest_game`.
 * `liquid`
     * The cubic source node for a liquid.
     * Faces bordering to the same node are never rendered.
-    * Connects to node specified in `liquid_alternative_flowing`.
-    * You *must* set `liquid_alternative_source` to the node's own name.
+    * Connects to node specified in `liquid_alternative_flowing` if specified.
     * Use `backface_culling = false` for the tiles you want to make
       visible when inside the node.
 * `flowingliquid`
@@ -1719,6 +1721,8 @@ Displays text on the HUD.
 * `scale`: Defines the bounding rectangle of the text.
   A value such as `{x=100, y=100}` should work.
 * `text`: The text to be displayed in the HUD element.
+  Supports `minetest.translate` (always)
+  and `minetest.colorize` (since protocol version 44)
 * `number`: An integer containing the RGB value of the color used to draw the
   text. Specify `0xFFFFFF` for white text, `0xFF0000` for red, and so on.
 * `alignment`: The alignment of the text.
@@ -3017,6 +3021,16 @@ Elements
   centered on `H`. With the new coordinate system, `H` will modify the height.
 * `label` is the text on the button
 
+### `button_url[<X>,<Y>;<W>,<H>;<name>;<label>;<url>]`
+
+* Clickable button. When clicked, fields will be sent and the user will be given the
+  option to open the URL in a browser.
+* With the old coordinate system, buttons are a set height, but will be vertically
+  centered on `H`. With the new coordinate system, `H` will modify the height.
+* To make this into an `image_button`, you can use formspec styling.
+* `label` is the text on the button.
+* `url` must be a valid web URL, starting with `http://` or `https://`.
+
 ### `image_button[<X>,<Y>;<W>,<H>;<texture name>;<name>;<label>]`
 
 * `texture name` is the filename of an image
@@ -3042,6 +3056,11 @@ Elements
 
 * When clicked, fields will be sent and the form will quit.
 * Same as `button` in all other respects.
+
+### `button_url_exit[<X>,<Y>;<W>,<H>;<name>;<label>;<url>]`
+
+* When clicked, fields will be sent and the form will quit.
+* Same as `button_url` in all other respects.
 
 ### `image_button_exit[<X>,<Y>;<W>,<H>;<texture name>;<name>;<label>]`
 
@@ -3518,10 +3537,12 @@ Markup language used in `hypertext[]` elements uses tags that look like HTML tag
 The markup language is currently unstable and subject to change. Use with caution.
 Some tags can enclose text, they open with `<tagname>` and close with `</tagname>`.
 Tags can have attributes, in that case, attributes are in the opening tag in
-form of a key/value separated with equal signs. Attribute values should not be quoted.
+form of a key/value separated with equal signs.
+Attribute values should be quoted using either " or '.
 
-If you want to insert a literal greater-than sign or a backslash into the text,
-you must escape it by preceding it with a backslash.
+If you want to insert a literal greater-than, less-than, or a backslash into the text,
+you must escape it by preceding it with a backslash. In a quoted attribute value, you
+can insert a literal quote mark by preceding it with a backslash.
 
 These are the technically basic tags but see below for usual tags. Base tags are:
 
@@ -3538,11 +3559,13 @@ Changes the style of the text.
 Sets global style.
 
 Global only styles:
+
 * `background`: Text background, a `colorspec` or `none`.
 * `margin`: Page margins in pixel.
 * `valign`: Text vertical alignment (`top`, `middle`, `bottom`).
 
 Inheriting styles (affects child elements):
+
 * `color`: Default text color. Given color is a `colorspec`.
 * `hovercolor`: Color of <action> tags when mouse is over.
 * `size`: Default text size.
@@ -3556,6 +3579,7 @@ tags appear.
 `<tag name=... color=... hovercolor=... font=... size=...>`
 
 Defines or redefines tag style. This can be used to define new tags.
+
 * `name`: Name of the tag to define or change.
 * `color`: Text color. Given color is a `colorspec`.
 * `hovercolor`: Text color when element hovered (only for `action` tags). Given color is a `colorspec`.
@@ -3588,6 +3612,7 @@ Other tags can be added using `<tag ...>` tag.
 Make that text a clickable text triggering an action.
 
 * `name`: Name of the action (mandatory).
+* `url`: URL to open when the action is triggered (optional).
 
 When clicked, the formspec is send to the server. The value of the text field
 sent to `on_player_receive_fields` will be "action:" concatenated to the action
@@ -4086,25 +4111,31 @@ Two functions are provided to translate strings: `minetest.translate` and
   avoid clashes with other mods.
   This function must be given a number of arguments equal to the number of
   arguments the translated string expects.
-  Arguments are literal strings -- they will not be translated, so if you want
-  them to be, they need to come as outputs of `minetest.translate` as well.
+  Arguments are literal strings -- they will not be translated.
 
-  For instance, suppose we want to translate "@1 Wool" with "@1" being replaced
-  by the translation of "Red". We can do the following:
+For instance, suppose we want to greet players when they join. We can do the
+following:
 
-  ```lua
-  local S = minetest.get_translator()
-  S("@1 Wool", S("Red"))
-  ```
+```lua
+local S = minetest.get_translator("hello")
+minetest.register_on_joinplayer(function(player)
+    local name = player:get_player_name()
+    minetest.chat_send_player(name, S("Hello @1, how are you today?", name))
+end)
+```
 
-  This will be displayed as "Red Wool" on old clients and on clients that do
-  not have localization enabled. However, if we have for instance a translation
-  file named `wool.fr.tr` containing the following:
+When someone called "CoolGuy" joins the game with an old client or a client
+that does not have localization enabled, they will see `Hello CoolGuy, how are
+you today?`
 
-      @1 Wool=Laine @1
-      Red=Rouge
+However, if we have for instance a translation file named `hello.de.tr`
+containing the following:
 
-  this will be displayed as "Laine Rouge" on clients with a French locale.
+    # textdomain: hello
+    Hello @1, how are you today?=Hallo @1, wie geht es dir heute?
+
+and CoolGuy has set a German locale, they will see `Hallo CoolGuy, wie geht es
+dir heute?`
 
 Operations on translated strings
 --------------------------------
@@ -5097,6 +5128,9 @@ Collision info passed to `on_step` (`moveresult` argument):
             axis = string, -- "x", "y" or "z"
             node_pos = vector, -- if type is "node"
             object = ObjectRef, -- if type is "object"
+            -- The position of the entity when the collision occurred.
+            -- Available since feature "moveresult_new_pos".
+            new_pos = vector,
             old_velocity = vector,
             new_velocity = vector,
         },
@@ -5306,6 +5340,12 @@ Utilities
 
 * `minetest.get_worldpath()`: returns e.g. `"/home/user/.minetest/world"`
     * Useful for storing custom data
+* `minetest.get_mod_data_path()`: returns e.g. `"/home/user/.minetest/mod_data/mymod"`
+    * Useful for storing custom data *independently of worlds*.
+    * Must be called during mod load time.
+    * Can read or write to this directory at any time.
+    * It's possible that multiple Minetest instances are running at the same
+      time, which may lead to corruption if you are not careful.
 * `minetest.is_singleplayer()`
 * `minetest.features`: Table containing API feature flags
 
@@ -5401,6 +5441,13 @@ Utilities
       lsystem_decoration_type = true,
       -- Overrideable pointing range using the itemstack meta key `"range"` (5.9.0)
       item_meta_range = true,
+      -- Allow passing an optional "actor" ObjectRef to the following functions:
+      -- minetest.place_node, minetest.dig_node, minetest.punch_node (5.9.0)
+      node_interaction_actor = true,
+      -- "new_pos" field in entity moveresult (5.9.0)
+      moveresult_new_pos = true,
+      -- Allow removing definition fields in `minetest.override_item`
+      override_item_remove_fields = true,
   }
   ```
 
@@ -5570,11 +5617,17 @@ Call these functions only at load time!
 * `minetest.register_node(name, node definition)`
 * `minetest.register_craftitem(name, item definition)`
 * `minetest.register_tool(name, item definition)`
-* `minetest.override_item(name, redefinition)`
+* `minetest.override_item(name, redefinition, del_fields)`
+    * `redefinition` is a table of fields `[name] = new_value`,
+      overwriting fields of or adding fields to the existing definition.
+    * `del_fields` is a list of field names to be set
+      to `nil` ("deleted from") the original definition.
     * Overrides fields of an item registered with register_node/tool/craftitem.
     * Note: Item must already be defined, (opt)depend on the mod defining it.
     * Example: `minetest.override_item("default:mese",
-      {light_source=minetest.LIGHT_MAX})`
+      {light_source=minetest.LIGHT_MAX}, {"sounds"})`:
+      Overwrites the `light_source` field,
+      removes the sounds from the definition of the mese block.
 * `minetest.unregister_item(name)`
     * Unregisters the item from the engine, and deletes the entry with key
       `name` from `minetest.registered_items` and from the associated item table
@@ -5667,6 +5720,8 @@ Call these functions only at load time!
       aliases handled.
 * `minetest.register_on_shutdown(function())`
     * Called before server shutdown
+    * Players that were kicked by the shutdown procedure are still fully accessible
+     in `minetest.get_connected_players()`.
     * **Warning**: If the server terminates abnormally (i.e. crashes), the
       registered callbacks **will likely not be run**. Data should be saved at
       semi-frequent intervals as well as on server shutdown.
@@ -5693,7 +5748,7 @@ Call these functions only at load time!
     * Called when a player is punched
     * Note: This callback is invoked even if the punched player is dead.
     * `player`: ObjectRef - Player that was punched
-    * `hitter`: ObjectRef - Player that hit
+    * `hitter`: ObjectRef - Player that hit. Can be nil.
     * `time_from_last_punch`: Meant for disallowing spamming of clicks
       (can be nil).
     * `tool_capabilities`: Capability table of used item (can be nil)
@@ -5743,6 +5798,7 @@ Call these functions only at load time!
     * `last_login`: The timestamp of the previous login, or nil if player is new
 * `minetest.register_on_leaveplayer(function(ObjectRef, timed_out))`
     * Called when a player leaves the game
+    * Does not get executed for connected players on shutdown.
     * `timed_out`: True for timeout, false for other reasons.
 * `minetest.register_on_authplayer(function(name, ip, is_success))`
     * Called when a client attempts to log into an account.
@@ -5772,8 +5828,8 @@ Call these functions only at load time!
     * Return `true` to mark the command as handled, which means that the default
       handlers will be prevented.
 * `minetest.register_on_player_receive_fields(function(player, formname, fields))`
-    * Called when the server received input from `player` in a formspec with
-      the given `formname`. Specifically, this is called on any of the
+    * Called when the server received input from `player`.
+      Specifically, this is called on any of the
       following events:
           * a button was pressed,
           * Enter was pressed while the focus was on a text field
@@ -5784,6 +5840,9 @@ Call these functions only at load time!
           * an entry was double-clicked in a textlist or table,
           * a scrollbar was moved, or
           * the form was actively closed by the player.
+    * `formname` is the name passed to `minetest.show_formspec`.
+      Special case: The empty string refers to the player inventory
+      (the formspec set by the `set_inventory_formspec` player method).
     * Fields are sent for formspec elements which define a field. `fields`
       is a table containing each formspecs element value (as string), with
       the `name` parameter as index for each. The value depends on the
@@ -5969,8 +6028,9 @@ handler.
 Chat
 ----
 
-* `minetest.chat_send_all(text)`
-* `minetest.chat_send_player(name, text)`
+* `minetest.chat_send_all(text)`: send chat message to all players
+* `minetest.chat_send_player(name, text)`: send chat message to specific player
+    * `name`: Name of the player
 * `minetest.format_chat_message(name, message)`
     * Used by the server to format a chat message, based on the setting `chat_message_format`.
       Refer to the documentation of the setting for a list of valid placeholders.
@@ -5982,13 +6042,14 @@ Environment access
 ------------------
 
 * `minetest.set_node(pos, node)`
-* `minetest.add_node(pos, node)`: alias to `minetest.set_node`
-    * Set node at position `pos`
+    * Set node at position `pos`.
+    * Any existing metadata is deleted.
     * `node`: table `{name=string, param1=number, param2=number}`
-    * If param1 or param2 is omitted, it's set to `0`.
+      If param1 or param2 is omitted, it's set to `0`.
     * e.g. `minetest.set_node({x=0, y=10, z=0}, {name="default:wood"})`
+* `minetest.add_node(pos, node)`: alias to `minetest.set_node`
 * `minetest.bulk_set_node({pos1, pos2, pos3, ...}, node)`
-    * Set node on all positions set in the first argument.
+    * Set the same node at all positions in the first argument.
     * e.g. `minetest.bulk_set_node({{x=0, y=1, z=1}, {x=1, y=2, z=2}}, {name="default:stone"})`
     * For node specification or position syntax see `minetest.set_node` call
     * Faster than set_node due to single call, but still considerably slower
@@ -5998,16 +6059,17 @@ Environment access
       For setting a cube, this is 1.3x faster than set_node whereas LVM is 20
       times faster.
 * `minetest.swap_node(pos, node)`
-    * Set node at position, but don't remove metadata
-* `minetest.remove_node(pos)`
-    * By default it does the same as `minetest.set_node(pos, {name="air"})`
+    * Swap node at position with another.
+    * This keeps the metadata intact and will not run con-/destructor callbacks.
+* `minetest.remove_node(pos)`: Remove a node
+    * Equivalent to `minetest.set_node(pos, {name="air"})`, but a bit faster.
 * `minetest.get_node(pos)`
-    * Returns the node at the given position as table in the format
-      `{name="node_name", param1=0, param2=0}`,
-      returns `{name="ignore", param1=0, param2=0}` for unloaded areas.
+    * Returns the node at the given position as table in the same format as `set_node`.
+    * This function never returns `nil` and instead returns
+      `{name="ignore", param1=0, param2=0}` for unloaded areas.
 * `minetest.get_node_or_nil(pos)`
     * Same as `get_node` but returns `nil` for unloaded areas.
-    * Note that areas may still contain "ignore" despite being loaded.
+    * Note that even loaded areas can contain "ignore" nodes.
 * `minetest.get_node_light(pos[, timeofday])`
     * Gets the light value at the given position. Note that the light value
       "inside" the node at the given position is returned, so you usually want
@@ -6031,13 +6093,16 @@ Environment access
     * Returns a number between `0` and `15`
     * Currently it's the same as `math.floor(param1 / 16)`, except that it
       ensures compatibility.
-* `minetest.place_node(pos, node)`
+* `minetest.place_node(pos, node[, placer])`
     * Place node with the same effects that a player would cause
-* `minetest.dig_node(pos)`
+    * `placer`: The ObjectRef that places the node (optional)
+* `minetest.dig_node(pos[, digger])`
     * Dig node with the same effects that a player would cause
+    * `digger`: The ObjectRef that digs the node (optional)
     * Returns `true` if successful, `false` on failure (e.g. protected location)
-* `minetest.punch_node(pos)`
+* `minetest.punch_node(pos[, puncher])`
     * Punch node with the same effects that a player would cause
+    * `puncher`: The ObjectRef that punches the node (optional)
 * `minetest.spawn_falling_node(pos)`
     * Change node into falling node
     * Returns `true` and the ObjectRef of the spawned entity if successful, `false` on failure
@@ -6059,20 +6124,21 @@ Environment access
     * Returns `ObjectRef`, or `nil` if failed
     * Items can be added also to unloaded and non-generated blocks.
 * `minetest.get_player_by_name(name)`: Get an `ObjectRef` to a player
-* `minetest.get_objects_inside_radius(pos, radius)`: returns a list of
-  ObjectRefs.
+    * Returns nothing in case of error (player offline, doesn't exist, ...).
+* `minetest.get_objects_inside_radius(pos, radius)`
+    * returns a list of ObjectRefs.
     * `radius`: using a Euclidean metric
-* `minetest.get_objects_in_area(pos1, pos2)`: returns a list of
-  ObjectRefs.
-     * `pos1` and `pos2` are the min and max positions of the area to search.
-* `minetest.set_timeofday(val)`
+* `minetest.get_objects_in_area(pos1, pos2)`
+    * returns a list of ObjectRefs.
+    * `pos1` and `pos2` are the min and max positions of the area to search.
+* `minetest.set_timeofday(val)`: set time of day
     * `val` is between `0` and `1`; `0` for midnight, `0.5` for midday
-* `minetest.get_timeofday()`
+* `minetest.get_timeofday()`: get time of day
 * `minetest.get_gametime()`: returns the time, in seconds, since the world was
   created. The time is not available (`nil`) before the first server step.
 * `minetest.get_day_count()`: returns number days elapsed since world was
   created.
-    * accounts for time changes.
+    * Time changes are accounted for.
 * `minetest.find_node_near(pos, radius, nodenames, [search_center])`: returns
   pos or `nil`.
     * `radius`: using a maximum metric
@@ -6375,7 +6441,8 @@ Formspec
 * `minetest.show_formspec(playername, formname, formspec)`
     * `playername`: name of player to show formspec
     * `formname`: name passed to `on_player_receive_fields` callbacks.
-      It should follow the `"modname:<whatever>"` naming convention
+      It should follow the `"modname:<whatever>"` naming convention.
+      `formname` must not be empty.
     * `formspec`: formspec to display
 * `minetest.close_formspec(playername, formname)`
     * `playername`: name of player to close formspec
@@ -7283,8 +7350,41 @@ Global tables
 All callbacks registered with [Global callback registration functions] are added
 to corresponding `minetest.registered_*` tables.
 
+For historical reasons, the use of an -s suffix in these names is inconsistent.
 
-
+* `minetest.registered_on_chat_messages`
+* `minetest.registered_on_chatcommands`
+* `minetest.registered_globalsteps`
+* `minetest.registered_on_punchnodes`
+* `minetest.registered_on_placenodes`
+* `minetest.registered_on_dignodes`
+* `minetest.registered_on_generateds`
+* `minetest.registered_on_newplayers`
+* `minetest.registered_on_dieplayers`
+* `minetest.registered_on_respawnplayers`
+* `minetest.registered_on_prejoinplayers`
+* `minetest.registered_on_joinplayers`
+* `minetest.registered_on_leaveplayers`
+* `minetest.registered_on_player_receive_fields`
+* `minetest.registered_on_cheats`
+* `minetest.registered_on_crafts`
+* `minetest.registered_craft_predicts`
+* `minetest.registered_on_item_eats`
+* `minetest.registered_on_item_pickups`
+* `minetest.registered_on_punchplayers`
+* `minetest.registered_on_authplayers`
+* `minetest.registered_on_player_inventory_actions`
+* `minetest.registered_allow_player_inventory_actions`
+* `minetest.registered_on_rightclickplayers`
+* `minetest.registered_on_mods_loaded`
+* `minetest.registered_on_shutdown`
+* `minetest.registered_on_protection_violation`
+* `minetest.registered_on_priv_grant`
+* `minetest.registered_on_priv_revoke`
+* `minetest.registered_can_bypass_userlimit`
+* `minetest.registered_on_modchannel_message`
+* `minetest.registered_on_liquid_transformed`
+* `minetest.registered_on_mapblocks_changed`
 
 Class reference
 ===============
@@ -7380,6 +7480,7 @@ An `InvRef` is a reference to an inventory.
     * returns `false` on error (e.g. invalid `listname` or `size`)
 * `get_width(listname)`: get width of a list
 * `set_width(listname, width)`: set width of list; currently used for crafting
+    * returns `false` on error (e.g. invalid `listname` or `width`)
 * `get_stack(listname, i)`: get a copy of stack index `i` in list
 * `set_stack(listname, i, stack)`: copy `stack` to index `i` in list
 * `get_list(listname)`: returns full list (list of `ItemStack`s)
@@ -7748,11 +7849,11 @@ child will follow movement and rotation of that bone.
     * no-op if object is attached
 * `punch(puncher, time_from_last_punch, tool_capabilities, dir)`
     * punches the object, triggering all consequences a normal punch would have
-    * `puncher`: another `ObjectRef` which punched the object
+    * `puncher`: another `ObjectRef` which punched the object or `nil`
     * `dir`: direction vector of punch
     * Other arguments: See `on_punch` for entities
-    * All arguments except `puncher` can be `nil`, in which case a default
-      value will be used
+    * Arguments `time_from_last_punch`, `tool_capabilities`, and `dir`
+      will be replaced with a default value when the caller sets them to `nil`.
 * `right_click(clicker)`:
     * simulates using the 'place/use' key on the object
     * triggers all consequences as if a real player had done this
@@ -7914,8 +8015,12 @@ child will follow movement and rotation of that bone.
         * Fourth column: subject looking to the right
         * Fifth column:  subject viewed from above
         * Sixth column:  subject viewed from below
-* `get_entity_name()` (**Deprecated**: Will be removed in a future version, use the field `self.name` instead)
-* `get_luaentity()`: returns the object's associated luaentity table
+* `get_luaentity()`:
+	* Returns the object's associated luaentity table, if there is one
+	* Otherwise returns `nil` (e.g. for players)
+* `get_entity_name()`:
+    * **Deprecated**: Will be removed in a future version,
+      use `:get_luaentity().name` instead.
 
 #### Player only (no-op for other objects)
 
@@ -8008,13 +8113,18 @@ child will follow movement and rotation of that bone.
 * `set_physics_override(override_table)`
     * Overrides the physics attributes of the player
     * `override_table` is a table with the following fields:
-        * `speed`: multiplier to default movement speed and acceleration values (default: `1`)
-        * `jump`: multiplier to default jump value (default: `1`)
-        * `gravity`: multiplier to default gravity value (default: `1`)
+        * `speed`: multiplier to *all* movement speed (`speed_*`) and
+                   acceleration (`acceleration_*`) values (default: `1`)
+        * `speed_walk`: multiplier to default walk speed value (default: `1`)
+            * Note: The actual walk speed is the product of `speed` and `speed_walk`
         * `speed_climb`: multiplier to default climb speed value (default: `1`)
             * Note: The actual climb speed is the product of `speed` and `speed_climb`
         * `speed_crouch`: multiplier to default sneak speed value (default: `1`)
             * Note: The actual sneak speed is the product of `speed` and `speed_crouch`
+        * `speed_fast`: multiplier to default speed value in Fast Mode (default: `1`)
+            * Note: The actual fast speed is the product of `speed` and `speed_fast`
+        * `jump`: multiplier to default jump value (default: `1`)
+        * `gravity`: multiplier to default gravity value (default: `1`)
         * `liquid_fluidity`: multiplier to liquid movement resistance value
           (for nodes with `liquid_move_physics`); the higher this value, the lower the
           resistance to movement. At `math.huge`, the resistance is zero and you can
@@ -8032,6 +8142,8 @@ child will follow movement and rotation of that bone.
         * `acceleration_air`: multiplier to acceleration
           when jumping or falling (default: `1`)
             * Note: The actual acceleration is the product of `speed` and `acceleration_air`
+        * `acceleration_fast`: multiplier to acceleration in Fast Mode (default: `1`)
+            * Note: The actual acceleration is the product of `speed` and `acceleration_fast`
         * `sneak`: whether player can sneak (default: `true`)
         * `sneak_glitch`: whether player can use the new move code replications
           of the old sneak side-effects: sneak ladders and 2 node sneak jump
@@ -8123,7 +8235,11 @@ child will follow movement and rotation of that bone.
             * `"plain"`: Uses 0 textures, `base_color` used as both fog and sky.
             (default: `"regular"`)
         * `textures`: A table containing up to six textures in the following
-            order: Y+ (top), Y- (bottom), X- (west), X+ (east), Z+ (north), Z- (south).
+            order: Y+ (top), Y- (bottom), X+ (east), X- (west), Z- (south), Z+ (north).
+            The top and bottom textures are oriented in-line with the east (X+) face (the top edge of the
+            bottom texture and the bottom edge of the top texture touch the east face).
+            Some top and bottom textures expect to be aligned with the north face and will need to be rotated
+            by -90 and 90 degrees, respectively, to fit the eastward orientation.
         * `clouds`: Boolean for whether clouds appear. (default: `true`)
         * `sky_color`: A table used in `"regular"` type only, containing the
           following values (alpha is ignored):
@@ -8158,14 +8274,13 @@ child will follow movement and rotation of that bone.
                 `"default"` uses the classic Minetest sun and moon tinting.
                 Will use tonemaps, if set to `"default"`. (default: `"default"`)
         * `fog`: A table with following optional fields:
-            * `fog_distance`: integer, set an upper bound the client's viewing_range (inluding range_all).
-               By default, fog_distance is controlled by the client's viewing_range, and this field is not set.
-               Any value >= 0 sets the desired upper bound for the client's viewing_range and disables range_all.
-               Any value < 0, resets the behavior to being client-controlled.
+            * `fog_distance`: integer, set an upper bound for the client's viewing_range.
+               Any value >= 0 sets the desired upper bound for viewing_range,
+               disables range_all and prevents disabling fog (F3 key by default).
+               Any value < 0 resets the behavior to being client-controlled.
                (default: -1)
             * `fog_start`: float, override the client's fog_start.
                Fraction of the visible distance at which fog starts to be rendered.
-               By default, fog_start is controlled by the client's `fog_start` setting, and this field is not set.
                Any value between [0.0, 0.99] set the fog_start as a fraction of the viewing_range.
                Any value < 0, resets the behavior to being client-controlled.
                (default: -1)
@@ -8634,7 +8749,8 @@ Player properties need to be saved manually.
     -- "mesh" uses the defined mesh model.
     -- "wielditem" is used for dropped items.
     --   (see builtin/game/item_entity.lua).
-    --   For this use 'wield_item = itemname' (Deprecated: 'textures = {itemname}').
+    --   For this use 'wield_item = itemname'.
+    --   Setting 'textures = {itemname}' has the same effect, but is deprecated.
     --   If the item has a 'wield_image' the object will be an extrusion of
     --   that, otherwise:
     --   If 'itemname' is a cubic node or nodebox the object will appear
@@ -8661,8 +8777,8 @@ Player properties need to be saved manually.
     -- "cube" uses 6 textures just like a node, but all 6 must be defined.
     -- "sprite" uses 1 texture.
     -- "upright_sprite" uses 2 textures: {front, back}.
-    -- "wielditem" expects 'textures = {itemname}' (see 'visual' above).
     -- "mesh" requires one texture for each mesh buffer/material (in order)
+    -- Deprecated usage of "wielditem" expects 'textures = {itemname}' (see 'visual' above).
 
     colors = {},
     -- Number of required colors depends on visual
@@ -9065,19 +9181,20 @@ Used by `minetest.register_node`, `minetest.register_craftitem`, and
     -- Otherwise should be name of node which the client immediately places
     -- upon digging. Server will always update with actual result shortly.
 
-    touch_interaction = {
-        -- Only affects touchscreen clients.
-        -- Defines the meaning of short and long taps with the item in hand.
-        -- The fields in this table have two valid values:
-        -- * "long_dig_short_place" (long tap  = dig, short tap = place)
-        -- * "short_dig_long_place" (short tap = dig, long tap  = place)
-        -- The field to be used is selected according to the current
-        -- `pointed_thing`.
-
-        pointed_nothing = "long_dig_short_place",
-        pointed_node    = "long_dig_short_place",
-        pointed_object  = "short_dig_long_place",
+    touch_interaction = <TouchInteractionMode> OR {
+        pointed_nothing = <TouchInteractionMode>,
+        pointed_node    = <TouchInteractionMode>,
+        pointed_object  = <TouchInteractionMode>,
     },
+      -- Only affects touchscreen clients.
+      -- Defines the meaning of short and long taps with the item in hand.
+      -- If specified as a table, the field to be used is selected according to
+      -- the current `pointed_thing`.
+      -- There are three possible TouchInteractionMode values:
+      -- * "user"                 (meaning depends on client-side settings)
+      -- * "long_dig_short_place" (long tap  = dig, short tap = place)
+      -- * "short_dig_long_place" (short tap = dig, long tap  = place)
+      -- The default value is "user".
 
     sound = {
         -- Definition of item sounds to be played at various events.
@@ -9290,10 +9407,8 @@ Used by `minetest.register_node`.
     -- flowing version (`liquid_alternative_flowing`) and
     -- source version (`liquid_alternative_source`) of a liquid.
     --
-    -- Specifically, these fields are required if any of these is true:
-    -- * `liquidtype ~= "none" or
-    -- * `drawtype == "liquid" or
-    -- * `drawtype == "flowingliquid"
+    -- Specifically, these fields are required if `liquidtype ~= "none"` or
+    -- `drawtype == "flowingliquid"`.
     --
     -- Liquids consist of up to two nodes: source and flowing.
     --
@@ -9579,6 +9694,7 @@ Used by `minetest.register_node`.
 
     on_receive_fields = function(pos, formname, fields, sender),
     -- fields = {name1 = value1, name2 = value2, ...}
+    -- formname should be the empty string; you **must not** use formname.
     -- Called when an UI form (e.g. sign text input) returns data.
     -- See minetest.register_on_player_receive_fields for more info.
     -- default: nil

@@ -27,7 +27,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "nodedef.h"
 #include "nodemetadata.h"
 #include "gamedef.h"
-#include "map.h"
 #include "porting.h"
 #include "profiler.h"
 #include "raycast.h"
@@ -35,6 +34,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "scripting_server.h"
 #include "server.h"
 #include "util/serialize.h"
+#include "util/numeric.h"
 #include "util/basic_macros.h"
 #include "util/pointedthing.h"
 #include "threading/mutex_auto_lock.h"
@@ -159,8 +159,7 @@ void LBMManager::loadIntroductionTimes(const std::string &times,
 	// Storing it in a map first instead of
 	// handling the stuff directly in the loop
 	// removes all duplicate entries.
-	// TODO make this std::unordered_map
-	std::map<std::string, u32> introduction_times;
+	std::unordered_map<std::string, u32> introduction_times;
 
 	/*
 	The introduction times string consists of name~time entries,
@@ -182,13 +181,11 @@ void LBMManager::loadIntroductionTimes(const std::string &times,
 	}
 
 	// Put stuff from introduction_times into m_lbm_lookup
-	for (std::map<std::string, u32>::const_iterator it = introduction_times.begin();
-		it != introduction_times.end(); ++it) {
-		const std::string &name = it->first;
-		u32 time = it->second;
+	for (auto &it : introduction_times) {
+		const std::string &name = it.first;
+		u32 time = it.second;
 
-		std::map<std::string, LoadingBlockModifierDef *>::iterator def_it =
-			m_lbm_defs.find(name);
+		auto def_it = m_lbm_defs.find(name);
 		if (def_it == m_lbm_defs.end()) {
 			// This seems to be an LBM entry for
 			// an LBM we haven't loaded. Discard it.
@@ -269,29 +266,29 @@ void LBMManager::applyLBMs(ServerEnvironment *env, MapBlock *block,
 		content_t previous_c = CONTENT_IGNORE;
 		const std::vector<LoadingBlockModifierDef *> *lbm_list = nullptr;
 
-		for (pos.X = 0; pos.X < MAP_BLOCKSIZE; pos.X++)
-			for (pos.Y = 0; pos.Y < MAP_BLOCKSIZE; pos.Y++)
-				for (pos.Z = 0; pos.Z < MAP_BLOCKSIZE; pos.Z++) {
-					n = block->getNodeNoCheck(pos);
-					c = n.getContent();
+		for (pos.Z = 0; pos.Z < MAP_BLOCKSIZE; pos.Z++)
+		for (pos.Y = 0; pos.Y < MAP_BLOCKSIZE; pos.Y++)
+		for (pos.X = 0; pos.X < MAP_BLOCKSIZE; pos.X++) {
+			n = block->getNodeNoCheck(pos);
+			c = n.getContent();
 
-					// If content_t are not matching perform an LBM lookup
-					if (previous_c != c) {
-						lbm_list = it->second.lookup(c);
-						previous_c = c;
-					}
+			// If content_t are not matching perform an LBM lookup
+			if (previous_c != c) {
+				lbm_list = it->second.lookup(c);
+				previous_c = c;
+			}
 
-					if (!lbm_list)
-						continue;
-					for (auto lbmdef : *lbm_list) {
-						lbmdef->trigger(env, pos + pos_of_block, n, dtime_s);
-						if (block->isOrphan())
-							return;
-						n = block->getNodeNoCheck(pos);
-						if (n.getContent() != c)
-							break; // The node was changed and the LBMs no longer apply
-					}
-				}
+			if (!lbm_list)
+				continue;
+			for (auto lbmdef : *lbm_list) {
+				lbmdef->trigger(env, pos + pos_of_block, n, dtime_s);
+				if (block->isOrphan())
+					return;
+				n = block->getNodeNoCheck(pos);
+				if (n.getContent() != c)
+					break; // The node was changed and the LBMs no longer apply
+			}
+		}
 	}
 }
 
@@ -299,7 +296,7 @@ void LBMManager::applyLBMs(ServerEnvironment *env, MapBlock *block,
 	ActiveBlockList
 */
 
-void fillRadiusBlock(v3s16 p0, s16 r, std::set<v3s16> &list)
+static void fillRadiusBlock(v3s16 p0, s16 r, std::set<v3s16> &list)
 {
 	v3s16 p;
 	for(p.X=p0.X-r; p.X<=p0.X+r; p.X++)
@@ -314,7 +311,7 @@ void fillRadiusBlock(v3s16 p0, s16 r, std::set<v3s16> &list)
 			}
 }
 
-void fillViewConeBlock(v3s16 p0,
+static void fillViewConeBlock(v3s16 p0,
 	const s16 r,
 	const v3f camera_pos,
 	const v3f camera_dir,
@@ -436,18 +433,12 @@ void OnMapblocksChangedReceiver::onMapEditEvent(const MapEditEvent &event)
 	ServerEnvironment
 */
 
-// Random device to seed pseudo random generators.
-static std::random_device seed;
-
-ServerEnvironment::ServerEnvironment(ServerMap *map,
-	ServerScripting *script_iface, Server *server,
-	const std::string &path_world, MetricsBackend *mb):
+ServerEnvironment::ServerEnvironment(std::unique_ptr<ServerMap> map,
+		Server *server, MetricsBackend *mb):
 	Environment(server),
-	m_map(map),
-	m_script(script_iface),
-	m_server(server),
-	m_path_world(path_world),
-	m_rgen(seed())
+	m_map(std::move(map)),
+	m_script(server->getScriptIface()),
+	m_server(server)
 {
 	m_step_time_counter = mb->addCounter(
 		"minetest_env_step_time", "Time spent in environment step (in microseconds)");
@@ -462,7 +453,8 @@ ServerEnvironment::ServerEnvironment(ServerMap *map,
 void ServerEnvironment::init()
 {
 	// Determine which database backend to use
-	std::string conf_path = m_path_world + DIR_DELIM + "world.mt";
+	const std::string world_path = m_server->getWorldPath();
+	const std::string conf_path = world_path + DIR_DELIM "world.mt";
 	Settings conf;
 
 	std::string player_backend_name = "sqlite3";
@@ -476,7 +468,7 @@ void ServerEnvironment::init()
 		u16 blocksize = 16;
 		conf.getU16NoEx("blocksize", blocksize);
 		if (blocksize != MAP_BLOCKSIZE) {
-			throw BaseException(std::string("The map's blocksize is not supported."));
+			throw BaseException("The map's blocksize is not supported.");
 		}
 
 		// Read those values before setting defaults
@@ -525,8 +517,8 @@ void ServerEnvironment::init()
 				<< "please read http://wiki.minetest.net/Database_backends." << std::endl;
 	}
 
-	m_player_database = openPlayerDatabase(player_backend_name, m_path_world, conf);
-	m_auth_database = openAuthDatabase(auth_backend_name, m_path_world, conf);
+	m_player_database = openPlayerDatabase(player_backend_name, world_path, conf);
+	m_auth_database = openAuthDatabase(auth_backend_name, world_path, conf);
 
 	if (m_map && m_script->has_on_mapblocks_changed()) {
 		m_map->addEventReceiver(&m_on_mapblocks_changed_receiver);
@@ -548,8 +540,7 @@ ServerEnvironment::~ServerEnvironment()
 	assert(m_active_blocks.size() == 0); // deactivateBlocksAndObjects does this
 
 	// Drop/delete map
-	if (m_map)
-		m_map->drop();
+	m_map.reset();
 
 	// Delete ActiveBlockModifiers
 	for (ABMWithState &m_abm : m_abms) {
@@ -703,7 +694,7 @@ void ServerEnvironment::saveMeta()
 	if (!m_meta_loaded)
 		return;
 
-	std::string path = m_path_world + DIR_DELIM "env_meta.txt";
+	std::string path = m_server->getWorldPath() + DIR_DELIM "env_meta.txt";
 
 	// Open file and serialize
 	std::ostringstream ss(std::ios_base::binary);
@@ -731,8 +722,10 @@ void ServerEnvironment::loadMeta()
 	SANITY_CHECK(!m_meta_loaded);
 	m_meta_loaded = true;
 
+	std::string path = m_server->getWorldPath() + DIR_DELIM "env_meta.txt";
+
 	// If file doesn't exist, load default environment metadata
-	if (!fs::PathExists(m_path_world + DIR_DELIM "env_meta.txt")) {
+	if (!fs::PathExists(path)) {
 		infostream << "ServerEnvironment: Loading default environment metadata"
 			<< std::endl;
 		loadDefaultMeta();
@@ -740,8 +733,6 @@ void ServerEnvironment::loadMeta()
 	}
 
 	infostream << "ServerEnvironment: Loading environment metadata" << std::endl;
-
-	std::string path = m_path_world + DIR_DELIM "env_meta.txt";
 
 	// Open file and deserialize
 	std::ifstream is(path.c_str(), std::ios_base::binary);
@@ -787,8 +778,7 @@ void ServerEnvironment::loadMeta()
 	}
 	m_lbm_mgr.loadIntroductionTimes(lbm_introduction_times, m_server, m_game_time);
 
-	m_day_count = args.exists("day_count") ?
-		args.getU64("day_count") : 0;
+	m_day_count = args.exists("day_count") ? args.getU32("day_count") : 0;
 }
 
 /**
@@ -945,9 +935,9 @@ public:
 		bool want_contents_cached = block->contents.empty() && !block->do_not_cache_contents;
 
 		v3s16 p0;
-		for(p0.X=0; p0.X<MAP_BLOCKSIZE; p0.X++)
-		for(p0.Y=0; p0.Y<MAP_BLOCKSIZE; p0.Y++)
 		for(p0.Z=0; p0.Z<MAP_BLOCKSIZE; p0.Z++)
+		for(p0.Y=0; p0.Y<MAP_BLOCKSIZE; p0.Y++)
+		for(p0.X=0; p0.X<MAP_BLOCKSIZE; p0.X++)
 		{
 			MapNode n = block->getNodeNoCheck(p0);
 			content_t c = n.getContent();
@@ -1519,7 +1509,7 @@ void ServerEnvironment::step(float dtime)
 		TimeTaker timer("modify in active blocks per interval");
 
 		// Shuffle to prevent persistent artifacts of ordering
-		std::shuffle(m_abms.begin(), m_abms.end(), m_rgen);
+		std::shuffle(m_abms.begin(), m_abms.end(), MyRandGenerator());
 
 		// Initialize handling of ActiveBlockModifiers
 		ABMHandler abmhandler(m_abms, m_cache_abm_interval, this, true);
@@ -1533,7 +1523,7 @@ void ServerEnvironment::step(float dtime)
 		// Shuffle the active blocks so that each block gets an equal chance
 		// of having its ABMs run.
 		std::copy(m_active_blocks.m_abm_list.begin(), m_active_blocks.m_abm_list.end(), output.begin());
-		std::shuffle(output.begin(), output.end(), m_rgen);
+		std::shuffle(output.begin(), output.end(), MyRandGenerator());
 
 		int i = 0;
 		// determine the time budget for ABMs
@@ -1727,8 +1717,8 @@ u16 ServerEnvironment::addActiveObject(std::unique_ptr<ServerActiveObject> objec
 */
 void ServerEnvironment::getAddedActiveObjects(PlayerSAO *playersao, s16 radius,
 	s16 player_radius,
-	std::set<u16> &current_objects,
-	std::queue<u16> &added_objects)
+	const std::set<u16> &current_objects,
+	std::vector<u16> &added_objects)
 {
 	f32 radius_f = radius * BS;
 	f32 player_radius_f = player_radius * BS;
@@ -1746,8 +1736,8 @@ void ServerEnvironment::getAddedActiveObjects(PlayerSAO *playersao, s16 radius,
 */
 void ServerEnvironment::getRemovedActiveObjects(PlayerSAO *playersao, s16 radius,
 	s16 player_radius,
-	std::set<u16> &current_objects,
-	std::queue<std::pair<bool /* gone? */, u16>> &removed_objects)
+	const std::set<u16> &current_objects,
+	std::vector<std::pair<bool /* gone? */, u16>> &removed_objects)
 {
 	f32 radius_f = radius * BS;
 	f32 player_radius_f = player_radius * BS;
@@ -1765,15 +1755,15 @@ void ServerEnvironment::getRemovedActiveObjects(PlayerSAO *playersao, s16 radius
 	for (u16 id : current_objects) {
 		ServerActiveObject *object = getActiveObject(id);
 
-		if (object == NULL) {
-			infostream << "ServerEnvironment::getRemovedActiveObjects():"
-				<< " object in current_objects is NULL" << std::endl;
-			removed_objects.emplace(true, id);
+		if (!object) {
+			warningstream << FUNCTION_NAME << ": found NULL object id="
+				<< (int)id << std::endl;
+			removed_objects.emplace_back(true, id);
 			continue;
 		}
 
 		if (object->isGone()) {
-			removed_objects.emplace(true, id);
+			removed_objects.emplace_back(true, id);
 			continue;
 		}
 
@@ -1785,7 +1775,7 @@ void ServerEnvironment::getRemovedActiveObjects(PlayerSAO *playersao, s16 radius
 			continue;
 
 		// Object is no longer visible
-		removed_objects.emplace(false, id);
+		removed_objects.emplace_back(false, id);
 	}
 }
 
@@ -1827,17 +1817,14 @@ void ServerEnvironment::getSelectedActiveObjects(
 	std::vector<PointedThing> &objects,
 	const std::optional<Pointabilities> &pointabilities)
 {
-	std::vector<ServerActiveObject *> objs;
-	getObjectsInsideRadius(objs, shootline_on_map.getMiddle(),
-		0.5 * shootline_on_map.getLength() + 5 * BS, nullptr);
 	const v3f line_vector = shootline_on_map.getVector();
 
-	for (auto obj : objs) {
+	auto process = [&] (ServerActiveObject *obj) -> bool {
 		if (obj->isGone())
-			continue;
+			return false;
 		aabb3f selection_box;
 		if (!obj->getSelectionBox(&selection_box))
-			continue;
+			return false;
 
 		v3f pos = obj->getBasePosition();
 		v3f rel_pos = shootline_on_map.start - pos;
@@ -1857,29 +1844,37 @@ void ServerEnvironment::getSelectedActiveObjects(
 				&current_intersection, &current_normal);
 			current_raw_normal = current_normal;
 		}
-		if (collision) {
-			PointabilityType pointable;
-			if (pointabilities) {
-				if (LuaEntitySAO* lsao = dynamic_cast<LuaEntitySAO*>(obj)) {
-					pointable = pointabilities->matchObject(lsao->getName(),
-							usao->getArmorGroups()).value_or(props->pointable);
-				} else if (PlayerSAO* psao = dynamic_cast<PlayerSAO*>(obj)) {
-					pointable = pointabilities->matchPlayer(psao->getArmorGroups()).value_or(
-							props->pointable);
-				} else {
-					pointable = props->pointable;
-				}
+		if (!collision)
+			return false;
+
+		PointabilityType pointable;
+		if (pointabilities) {
+			if (LuaEntitySAO* lsao = dynamic_cast<LuaEntitySAO*>(obj)) {
+				pointable = pointabilities->matchObject(lsao->getName(),
+						usao->getArmorGroups()).value_or(props->pointable);
+			} else if (PlayerSAO* psao = dynamic_cast<PlayerSAO*>(obj)) {
+				pointable = pointabilities->matchPlayer(psao->getArmorGroups()).value_or(
+						props->pointable);
 			} else {
 				pointable = props->pointable;
 			}
-			if (pointable != PointabilityType::POINTABLE_NOT) {
-				current_intersection += pos;
-				objects.emplace_back(
-					(s16) obj->getId(), current_intersection, current_normal, current_raw_normal,
-					(current_intersection - shootline_on_map.start).getLengthSQ(), pointable);
-			}
+		} else {
+			pointable = props->pointable;
 		}
-	}
+		if (pointable != PointabilityType::POINTABLE_NOT) {
+			current_intersection += pos;
+			f32 d_sq = (current_intersection - shootline_on_map.start).getLengthSQ();
+			objects.emplace_back(
+				(s16) obj->getId(), current_intersection, current_normal,
+				current_raw_normal, d_sq, pointable);
+		}
+		return false;
+	};
+
+	// Use "logic in callback" pattern to avoid useless vector filling
+	std::vector<ServerActiveObject*> tmp;
+	getObjectsInsideRadius(tmp, shootline_on_map.getMiddle(),
+		0.5 * shootline_on_map.getLength() + 5 * BS, process);
 }
 
 /*
